@@ -8,3 +8,4 @@ extensions:
     bundleID: com.scowalt.dayline.widget
     infoPath: Support/DaylineWidget-Info.plist
     entitlementsPath: Support/DaylineWidget.entitlements
+iconPath: Support/Assets.xcassets/AppIcon.appiconset/AppIcon.png

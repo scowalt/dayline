@@ -1,0 +1,300 @@
+#!/usr/bin/env -S uv run --no-project --quiet --python 3.14 --with cryptography>=44 python3
+import argparse
+import base64
+import functools
+import hashlib
+import json
+import os
+import plistlib
+import secrets
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import AuthorityInformationAccessOID, NameOID
+
+REPO = "scowalt/dayline"
+ENVIRONMENT = "testflight"
+APP_GROUP = "group.com.scowalt.dayline"
+BUNDLES = {
+    "Dayline": ("com.scowalt.dayline", "Dayline"),
+    "DaylineWidget": ("com.scowalt.dayline.widget", "Dayline Widget"),
+}
+SIGNING_DIR = Path(os.environ.get("DAYLINE_SIGNING_DIR", Path.home() / ".config/dayline/signing"))
+UPLOADED = SIGNING_DIR / "uploaded.sha256"
+RENEW_BEFORE = timedelta(days=30)
+
+
+def b64url(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=")
+
+
+@functools.cache
+def token():
+    key = serialization.load_pem_private_key(Path(os.environ["ASC_KEY_PATH"]).read_bytes(), None)
+    now = int(time.time())
+    header = {"alg": "ES256", "kid": os.environ["ASC_KEY_ID"], "typ": "JWT"}
+    claims = {"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"}
+    signing_input = b".".join(b64url(json.dumps(part, separators=(",", ":")).encode()) for part in (header, claims))
+    r, s = decode_dss_signature(key.sign(signing_input, ec.ECDSA(hashes.SHA256())))
+    return (signing_input + b"." + b64url(r.to_bytes(32) + s.to_bytes(32))).decode()
+
+
+def api(method, path, body=None, **query):
+    url = "https://api.appstoreconnect.apple.com" + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    request = urllib.request.Request(
+        url,
+        method=method,
+        data=json.dumps(body).encode() if body else None,
+        headers={"Authorization": f"Bearer {token()}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            payload = response.read()
+    except urllib.error.HTTPError as error:
+        sys.exit(f"{method} {path} failed with {error.code}: {error.read().decode()}")
+    return json.loads(payload) if payload else None
+
+
+def relationship(kind, ids):
+    return {"data": [{"type": kind, "id": i} for i in ids] if isinstance(ids, list) else {"type": kind, "id": ids}}
+
+
+def bundle_id(identifier):
+    found = api("GET", "/v1/bundleIds", **{"filter[identifier]": identifier, "limit": 200})["data"]
+    return next((b for b in found if b["attributes"]["identifier"] == identifier), None)
+
+
+def ensure_bundle_ids():
+    for identifier, name in BUNDLES.values():
+        record = bundle_id(identifier) or api(
+            "POST",
+            "/v1/bundleIds",
+            {"data": {"type": "bundleIds", "attributes": {"identifier": identifier, "name": name, "platform": "IOS"}}},
+        )["data"]
+        capabilities = api("GET", f"/v1/bundleIds/{record['id']}/bundleIdCapabilities")["data"]
+        if not any(c["attributes"]["capabilityType"] == "APP_GROUPS" for c in capabilities):
+            api(
+                "POST",
+                "/v1/bundleIdCapabilities",
+                {
+                    "data": {
+                        "type": "bundleIdCapabilities",
+                        "attributes": {"capabilityType": "APP_GROUPS"},
+                        "relationships": {"bundleId": relationship("bundleIds", record["id"])},
+                    }
+                },
+            )
+        print(f"{identifier}: App ID {record['id']} with App Groups")
+
+
+def spki(public_key):
+    return public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+
+
+def still_valid(not_after):
+    return not_after - RENEW_BEFORE > datetime.now(timezone.utc)
+
+
+def write_private(path, data):
+    path.touch(mode=0o600, exist_ok=True)
+    path.write_bytes(data)
+
+
+def ensure_certificate():
+    SIGNING_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key_path = SIGNING_DIR / "distribution.key"
+    key = serialization.load_pem_private_key(key_path.read_bytes(), None) if key_path.exists() else None
+    if key:
+        listed = api("GET", "/v1/certificates", **{"filter[certificateType]": "DISTRIBUTION", "limit": 200})["data"]
+        for record in listed:
+            certificate = x509.load_der_x509_certificate(base64.b64decode(record["attributes"]["certificateContent"]))
+            if spki(certificate.public_key()) == spki(key.public_key()) and still_valid(certificate.not_valid_after_utc):
+                return key, certificate, record["id"]
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Dayline TestFlight")]))
+        .sign(key, hashes.SHA256())
+    )
+    record = api(
+        "POST",
+        "/v1/certificates",
+        {
+            "data": {
+                "type": "certificates",
+                "attributes": {
+                    "certificateType": "DISTRIBUTION",
+                    "csrContent": csr.public_bytes(serialization.Encoding.PEM).decode(),
+                },
+            }
+        },
+    )["data"]
+    write_private(
+        key_path,
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ),
+    )
+    certificate = x509.load_der_x509_certificate(base64.b64decode(record["attributes"]["certificateContent"]))
+    print(f"Created Apple Distribution certificate {record['id']}, valid until {certificate.not_valid_after_utc:%Y-%m-%d}")
+    return key, certificate, record["id"]
+
+
+def issuer_of(certificate):
+    access = certificate.extensions.get_extension_for_class(x509.AuthorityInformationAccess).value
+    url = next(d.access_location.value for d in access if d.access_method == AuthorityInformationAccessOID.CA_ISSUERS)
+    with urllib.request.urlopen(url) as response:
+        return x509.load_der_x509_certificate(response.read())
+
+
+def write_p12(key, certificate):
+    password = secrets.token_urlsafe(24)
+    encryption = (
+        serialization.PrivateFormat.PKCS12.encryption_builder()
+        .kdf_rounds(50000)
+        .key_cert_algorithm(pkcs12.PBES.PBESv1SHA1And3KeyTripleDESCBC)
+        .hmac_hash(hashes.SHA1())
+        .build(password.encode())
+    )
+    bundle = pkcs12.serialize_key_and_certificates(
+        b"Dayline TestFlight", key, certificate, [issuer_of(certificate)], encryption
+    )
+    write_private(SIGNING_DIR / "distribution.p12", bundle)
+    write_private(SIGNING_DIR / "distribution.p12.password", password.encode())
+
+
+def embedded_plist(profile):
+    start = profile.index(b"<?xml")
+    end = profile.index(b"</plist>", start) + len(b"</plist>")
+    return plistlib.loads(profile[start:end])
+
+
+def usable(profile, certificate):
+    info = embedded_plist(profile)
+    return (
+        certificate.public_bytes(serialization.Encoding.DER) in info["DeveloperCertificates"]
+        and APP_GROUP in info["Entitlements"].get("com.apple.security.application-groups", [])
+        and still_valid(info["ExpirationDate"].replace(tzinfo=timezone.utc))
+    )
+
+
+def ensure_profile(product, certificate, certificate_id):
+    identifier, name = BUNDLES[product]
+    profile_name = f"{name} App Store"
+    for record in api("GET", "/v1/profiles", **{"filter[name]": profile_name, "limit": 200})["data"]:
+        content = base64.b64decode(record["attributes"]["profileContent"])
+        if record["attributes"]["profileState"] == "ACTIVE" and usable(content, certificate):
+            return content
+        api("DELETE", f"/v1/profiles/{record['id']}")
+    app_id = bundle_id(identifier)
+    if not app_id:
+        sys.exit(f"{identifier} has no App ID. Run `scripts/appstore ids` first.")
+    created = api(
+        "POST",
+        "/v1/profiles",
+        {
+            "data": {
+                "type": "profiles",
+                "attributes": {"name": profile_name, "profileType": "IOS_APP_STORE"},
+                "relationships": {
+                    "bundleId": relationship("bundleIds", app_id["id"]),
+                    "certificates": relationship("certificates", [certificate_id]),
+                },
+            }
+        },
+    )["data"]
+    content = base64.b64decode(created["attributes"]["profileContent"])
+    if not usable(content, certificate):
+        sys.exit(
+            f"The {profile_name} profile lacks {APP_GROUP}. In the developer portal, open the App ID {identifier}, "
+            f"configure App Groups to include {APP_GROUP}, save, and run this again."
+        )
+    print(f"Created profile {profile_name}")
+    return content
+
+
+def current_signing():
+    key, certificate, certificate_id = ensure_certificate()
+    profiles = {product: ensure_profile(product, certificate, certificate_id) for product in BUNDLES}
+    return key, certificate, profiles
+
+
+def write_signing(key, certificate, profiles):
+    write_p12(key, certificate)
+    for product, content in profiles.items():
+        (SIGNING_DIR / f"{product}.mobileprovision").write_bytes(content)
+
+
+def fingerprint(profiles):
+    return hashlib.sha256(b"".join(profiles[product] for product in BUNDLES)).hexdigest()
+
+
+def signing():
+    write_signing(*current_signing())
+    print(f"Signing files are in {SIGNING_DIR}")
+    apps = api("GET", "/v1/apps", **{"filter[bundleId]": BUNDLES["Dayline"][0]})["data"]
+    if not apps:
+        print(f"App Store Connect has no app for {BUNDLES['Dayline'][0]} yet; create it before the first upload.")
+
+
+def gh(*args, payload=None):
+    return subprocess.run(
+        ["gh", *args], input=payload, check=True, capture_output=True
+    ).stdout
+
+
+def upload_secrets():
+    gh(
+        "api", "-X", "PUT", f"repos/{REPO}/environments/{ENVIRONMENT}", "--input", "-",
+        payload=json.dumps({"deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}).encode(),
+    )
+    policies = json.loads(gh("api", f"repos/{REPO}/environments/{ENVIRONMENT}/deployment-branch-policies"))
+    if not any(p["name"] == "main" for p in policies["branch_policies"]):
+        gh("api", "-X", "POST", f"repos/{REPO}/environments/{ENVIRONMENT}/deployment-branch-policies",
+           "-f", "name=main", "-f", "type=branch")
+    profiles = {product: (SIGNING_DIR / f"{product}.mobileprovision").read_bytes() for product in BUNDLES}
+    values = {
+        "ASC_KEY_ID": os.environ["ASC_KEY_ID"].encode(),
+        "ASC_ISSUER_ID": os.environ["ASC_ISSUER_ID"].encode(),
+        "ASC_KEY_P8": Path(os.environ["ASC_KEY_PATH"]).read_bytes(),
+        "SIGNING_P12": base64.b64encode((SIGNING_DIR / "distribution.p12").read_bytes()),
+        "SIGNING_P12_PASSWORD": (SIGNING_DIR / "distribution.p12.password").read_bytes(),
+        **{f"PROFILE_{product.upper()}": base64.b64encode(content) for product, content in profiles.items()},
+    }
+    for name, value in values.items():
+        gh("secret", "set", name, "--repo", REPO, "--env", ENVIRONMENT, payload=value)
+        print(f"Set {name} on the {ENVIRONMENT} environment")
+    UPLOADED.write_text(fingerprint(profiles))
+
+
+def renew():
+    key, certificate, profiles = current_signing()
+    if UPLOADED.exists() and UPLOADED.read_text() == fingerprint(profiles):
+        return
+    write_signing(key, certificate, profiles)
+    upload_secrets()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Set up App Store signing for Dayline. Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH."
+    )
+    commands = {"ids": ensure_bundle_ids, "signing": signing, "secrets": upload_secrets, "renew": renew}
+    parser.add_argument("command", choices=list(commands))
+    commands[parser.parse_args().command]()
+
+
+main()
