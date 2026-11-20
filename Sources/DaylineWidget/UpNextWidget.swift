@@ -85,9 +85,14 @@ nonisolated struct UpNextProvider: TimelineProvider {
 
     func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<UpNextEntry>) -> Void) {
         Task {
-            let snapshot = await LiveCalendarService(writer: .widget).refreshIfStale(maxAge: .seconds(15 * 60))
+            let preferences = CalendarPreferences()
+            let snapshot = if preferences.usesDemoData {
+                SnapshotStore.shared?.latest()
+            } else {
+                await LiveCalendarService(writer: .widget).refreshIfStale(maxAge: .seconds(15 * 60))
+            }
             let now = Date.now
-            let entries = UpNextEntry.timeline(snapshot: snapshot, visibility: CalendarPreferences().visibility, now: now, calendar: .current)
+            let entries = UpNextEntry.timeline(snapshot: snapshot, visibility: preferences.visibility, now: now, calendar: .current)
             completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
         }
     }

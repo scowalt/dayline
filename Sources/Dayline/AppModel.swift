@@ -32,6 +32,7 @@ final class AppModel {
         self.service = service
         self.preferences = preferences
         self.isDemo = isDemo
+        preferences.usesDemoData = isDemo
         visibility = preferences.visibility
     }
 

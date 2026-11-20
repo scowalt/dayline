@@ -2,25 +2,41 @@ import DaylineCore
 import Foundation
 
 public struct CalendarPreferences: Sendable {
-    private let suiteName: String
-    private static let visibilityKey = "calendarVisibility"
+    private struct Stored: Codable {
+        var visibility = CalendarVisibility()
+        var usesDemoData = false
+    }
 
-    public init(suiteName: String = AppGroup.identifier) {
-        self.suiteName = suiteName
+    private let file: URL?
+
+    public init(file: URL? = AppGroup.containerURL?.appending(path: "Settings/preferences.json")) {
+        self.file = file
     }
 
     public var visibility: CalendarVisibility {
-        get {
-            UserDefaults(suiteName: suiteName)?.data(forKey: Self.visibilityKey)
-                .flatMap { try? JSONDecoder().decode(CalendarVisibility.self, from: $0) }
-                ?? CalendarVisibility()
-        }
-        nonmutating set {
-            UserDefaults(suiteName: suiteName)?.set(try? JSONEncoder().encode(newValue), forKey: Self.visibilityKey)
-        }
+        get { stored.visibility }
+        nonmutating set { update { $0.visibility = newValue } }
+    }
+
+    public var usesDemoData: Bool {
+        get { stored.usesDemoData }
+        nonmutating set { update { $0.usesDemoData = newValue } }
     }
 
     public func reset() {
-        UserDefaults(suiteName: suiteName)?.removeObject(forKey: Self.visibilityKey)
+        update { $0.visibility = CalendarVisibility() }
+    }
+
+    private var stored: Stored {
+        guard let file, let data = try? Data(contentsOf: file) else { return Stored() }
+        return (try? JSONDecoder().decode(Stored.self, from: data)) ?? Stored()
+    }
+
+    private func update(_ change: (inout Stored) -> Void) {
+        guard let file else { return }
+        var next = stored
+        change(&next)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(next).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 }
