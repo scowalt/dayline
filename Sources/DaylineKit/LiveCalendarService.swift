@@ -19,7 +19,6 @@ public actor LiveCalendarService: CalendarService {
     }
 
     public func signIn(authorize: WebAuthorizer) async throws(CalendarServiceError) -> Session {
-        guard let client else { throw .notConfigured }
         let pkce = PKCE.random()
         let state = randomURLSafeString(byteCount: 16)
         let callback: URL
@@ -45,14 +44,13 @@ public actor LiveCalendarService: CalendarService {
         }
         accessToken = grant.accessToken
         SnapshotStore.shared?.clear()
-        let snapshot = try? await fetchSnapshot(for: grant.credential, client: client)
+        let snapshot = try? await fetchSnapshot(for: grant.credential)
         return Session(account: grant.credential.account, snapshot: snapshot)
     }
 
     public func refresh() async throws(CalendarServiceError) -> Snapshot {
-        guard let client else { throw .notConfigured }
         guard let credential = vault.read() else { throw .sessionExpired }
-        return try await fetchSnapshot(for: credential, client: client)
+        return try await fetchSnapshot(for: credential)
     }
 
     public func signOut() async {
@@ -78,33 +76,31 @@ public actor LiveCalendarService: CalendarService {
         if let stored, Duration.seconds(Date.now.timeIntervalSince(stored.fetchedAt)) < maxAge {
             return stored
         }
-        guard let client else { return stored }
         do {
-            return try await fetchSnapshot(for: credential, client: client)
+            return try await fetchSnapshot(for: credential)
         } catch {
             return stored
         }
     }
 
-    private func fetchSnapshot(for credential: GoogleCredential, client: GoogleClient) async throws(CalendarServiceError) -> Snapshot {
+    private func fetchSnapshot(for credential: GoogleCredential) async throws(CalendarServiceError) -> Snapshot {
         let now = Date.now
         let window = GoogleCalendarAPI.window(containing: now, in: .current)
-        let calendars = try await allPages(credential: credential, client: client, request: GoogleCalendarAPI.calendarListRequest, decode: GoogleCalendarAPI.calendarListPage)
+        let calendars = try await allPages(credential: credential, request: GoogleCalendarAPI.calendarListRequest, decode: GoogleCalendarAPI.calendarListPage)
         let visibility = CalendarPreferences().visibility
-        let events = try await events(in: calendars.filter(visibility.isVisible).map(\.id), window: window, credential: credential, client: client)
+        let events = try await events(in: calendars.filter(visibility.isVisible).map(\.id), window: window, credential: credential)
         let snapshot = Snapshot(account: credential.account, calendars: calendars, events: events, range: window, fetchedAt: now)
         try? SnapshotStore.shared?.save(snapshot, as: writer)
         return snapshot
     }
 
-    private func events(in calendars: [CalendarID], window: DateInterval, credential: GoogleCredential, client: GoogleClient) async throws(CalendarServiceError) -> [CalendarEvent] {
+    private func events(in calendars: [CalendarID], window: DateInterval, credential: GoogleCredential) async throws(CalendarServiceError) -> [CalendarEvent] {
         let outcome = await withTaskGroup(of: Result<[CalendarEvent], CalendarServiceError>.self) { group in
             for calendar in calendars {
                 group.addTask {
                     do throws(CalendarServiceError) {
                         return .success(try await self.allPages(
                             credential: credential,
-                            client: client,
                             request: { GoogleCalendarAPI.eventsRequest(calendar: calendar, window: window, pageToken: $0) },
                             decode: { response throws(GoogleError) in try GoogleCalendarAPI.eventsPage(from: response, calendar: calendar) }
                         ))
@@ -130,14 +126,13 @@ public actor LiveCalendarService: CalendarService {
 
     private func allPages<Item: Sendable>(
         credential: GoogleCredential,
-        client: GoogleClient,
         request: @Sendable (String?) -> HTTPRequest,
         decode: @Sendable (HTTPResponse) throws(GoogleError) -> Page<Item>
     ) async throws(CalendarServiceError) -> [Item] {
         var items: [Item] = []
         var pageToken: String?
         repeat {
-            let response = try await authorizedResponse(to: request(pageToken), credential: credential, client: client)
+            let response = try await authorizedResponse(to: request(pageToken), credential: credential)
             let page = try google { () throws(GoogleError) in try decode(response) }
             items += page.items
             pageToken = page.nextPageToken
@@ -145,15 +140,15 @@ public actor LiveCalendarService: CalendarService {
         return items
     }
 
-    private func authorizedResponse(to request: HTTPRequest, credential: GoogleCredential, client: GoogleClient) async throws(CalendarServiceError) -> HTTPResponse {
-        let token = try await validAccessToken(credential: credential, client: client)
+    private func authorizedResponse(to request: HTTPRequest, credential: GoogleCredential) async throws(CalendarServiceError) -> HTTPResponse {
+        let token = try await validAccessToken(credential: credential)
         let response = try await transport.send(request.authorized(with: token))
         guard response.status == 401 else { return response }
-        let renewed = try await validAccessToken(rejecting: token, credential: credential, client: client)
+        let renewed = try await validAccessToken(rejecting: token, credential: credential)
         return try await transport.send(request.authorized(with: renewed))
     }
 
-    private func validAccessToken(rejecting rejected: AccessToken? = nil, credential: GoogleCredential, client: GoogleClient) async throws(CalendarServiceError) -> AccessToken {
+    private func validAccessToken(rejecting rejected: AccessToken? = nil, credential: GoogleCredential) async throws(CalendarServiceError) -> AccessToken {
         if let accessToken, accessToken != rejected, accessToken.isFresh(at: .now) {
             return accessToken
         }
