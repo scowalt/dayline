@@ -102,7 +102,7 @@ groups=\$(xcrun simctl getenv "\$id" HOME)/Containers/Shared/AppGroup
 for _ in \$(seq 30); do
   snapshot=\$(find "\$groups" -path '*/Snapshots/snapshot-app.json' -size +0 2>/dev/null | head -1)
   if [[ -n \$snapshot ]]; then
-    xcrun simctl spawn "\$id" launchctl list | grep -q "UIKitApplication:$bundle_id" || { echo "app is not running" >&2; exit 1; }
+    xcrun simctl spawn "\$id" launchctl list | grep "UIKitApplication:$bundle_id" >/dev/null || { echo "app is not running" >&2; exit 1; }
     echo "snapshot written: \$(wc -c <"\$snapshot") bytes"
     exit 0
   fi
