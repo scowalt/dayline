@@ -1,0 +1,10 @@
+version: 1
+bundleID: com.scowalt.dayline
+product: Dayline
+infoPath: Support/Dayline-Info.plist
+entitlementsPath: Support/Dayline.entitlements
+extensions:
+  - product: DaylineWidget
+    bundleID: com.scowalt.dayline.widget
+    infoPath: Support/DaylineWidget-Info.plist
+    entitlementsPath: Support/DaylineWidget.entitlements
