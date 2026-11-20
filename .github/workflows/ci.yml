@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Test DaylineCore
+        run: swift test --package-path Core
+
+  ios:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      XTOOL_VERSION: 1.24.0
+      XTOOL_SHA256: a56e98d69dea02a97a17e609f0ae8771c57ffaab23f1d62513fd9ada222026b3
+      DAYLINE_SIM_HOST: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install xtool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xtool.app.zip" "https://github.com/xtool-org/xtool/releases/download/$XTOOL_VERSION/xtool.app.zip"
+          echo "$XTOOL_SHA256  $RUNNER_TEMP/xtool.app.zip" | shasum -a 256 -c
+          ditto -x -k "$RUNNER_TEMP/xtool.app.zip" "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xtool.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+      - name: Build app and widget for the simulator
+        run: scripts/sim build
+      - name: Launch the demo build in a simulator
+        run: |
+          scripts/sim ship
+          scripts/sim boot
+          scripts/sim install
+          scripts/sim launch -demo
+          scripts/sim smoke
+      - name: Screenshot
+        if: always()
+        run: scripts/sim screenshot "$RUNNER_TEMP/dayline-demo.png" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dayline-simulator
+          path: |
+            xtool/Dayline.app
+            ${{ runner.temp }}/dayline-demo.png
+          if-no-files-found: ignore
+          retention-days: 14
