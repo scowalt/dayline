@@ -62,7 +62,7 @@ One-time setup, with an App Store Connect team API key (App Manager role) in `AS
 4. `scripts/appstore signing` creates an Apple Distribution certificate and the App Store profiles in `~/.config/dayline/signing`.
 5. `scripts/appstore secrets` stores the key, certificate and profiles in the `testflight` environment, which only `main` can use.
 
-The certificate expires after a year. Run steps 4 and 5 again before then.
+The certificate expires after a year. `scripts/appstore renew` repeats steps 4 and 5 when the certificate is within 30 days of expiring or a profile has changed, and prints nothing otherwise. A monthly bb automation on the build machine runs it from `origin/main`.
 
 ### xtool
 

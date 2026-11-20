@@ -2,6 +2,7 @@
 import argparse
 import base64
 import functools
+import hashlib
 import json
 import os
 import plistlib
@@ -30,6 +31,7 @@ BUNDLES = {
     "DaylineWidget": ("com.scowalt.dayline.widget", "Dayline Widget"),
 }
 SIGNING_DIR = Path(os.environ.get("DAYLINE_SIGNING_DIR", Path.home() / ".config/dayline/signing"))
+UPLOADED = SIGNING_DIR / "uploaded.sha256"
 RENEW_BEFORE = timedelta(days=30)
 
 
@@ -224,11 +226,24 @@ def ensure_profile(product, certificate, certificate_id):
     return content
 
 
-def signing():
+def current_signing():
     key, certificate, certificate_id = ensure_certificate()
+    profiles = {product: ensure_profile(product, certificate, certificate_id) for product in BUNDLES}
+    return key, certificate, profiles
+
+
+def write_signing(key, certificate, profiles):
     write_p12(key, certificate)
-    for product in BUNDLES:
-        (SIGNING_DIR / f"{product}.mobileprovision").write_bytes(ensure_profile(product, certificate, certificate_id))
+    for product, content in profiles.items():
+        (SIGNING_DIR / f"{product}.mobileprovision").write_bytes(content)
+
+
+def fingerprint(profiles):
+    return hashlib.sha256(b"".join(profiles[product] for product in BUNDLES)).hexdigest()
+
+
+def signing():
+    write_signing(*current_signing())
     print(f"Signing files are in {SIGNING_DIR}")
     apps = api("GET", "/v1/apps", **{"filter[bundleId]": BUNDLES["Dayline"][0]})["data"]
     if not apps:
@@ -250,29 +265,36 @@ def upload_secrets():
     if not any(p["name"] == "main" for p in policies["branch_policies"]):
         gh("api", "-X", "POST", f"repos/{REPO}/environments/{ENVIRONMENT}/deployment-branch-policies",
            "-f", "name=main", "-f", "type=branch")
+    profiles = {product: (SIGNING_DIR / f"{product}.mobileprovision").read_bytes() for product in BUNDLES}
     values = {
         "ASC_KEY_ID": os.environ["ASC_KEY_ID"].encode(),
         "ASC_ISSUER_ID": os.environ["ASC_ISSUER_ID"].encode(),
         "ASC_KEY_P8": Path(os.environ["ASC_KEY_PATH"]).read_bytes(),
         "SIGNING_P12": base64.b64encode((SIGNING_DIR / "distribution.p12").read_bytes()),
         "SIGNING_P12_PASSWORD": (SIGNING_DIR / "distribution.p12.password").read_bytes(),
-        **{
-            f"PROFILE_{product.upper()}": base64.b64encode((SIGNING_DIR / f"{product}.mobileprovision").read_bytes())
-            for product in BUNDLES
-        },
+        **{f"PROFILE_{product.upper()}": base64.b64encode(content) for product, content in profiles.items()},
     }
     for name, value in values.items():
         gh("secret", "set", name, "--repo", REPO, "--env", ENVIRONMENT, payload=value)
         print(f"Set {name} on the {ENVIRONMENT} environment")
+    UPLOADED.write_text(fingerprint(profiles))
+
+
+def renew():
+    key, certificate, profiles = current_signing()
+    if UPLOADED.exists() and UPLOADED.read_text() == fingerprint(profiles):
+        return
+    write_signing(key, certificate, profiles)
+    upload_secrets()
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Set up App Store signing for Dayline. Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH."
     )
-    parser.add_argument("command", choices=["ids", "signing", "secrets"])
-    command = parser.parse_args().command
-    {"ids": ensure_bundle_ids, "signing": signing, "secrets": upload_secrets}[command]()
+    commands = {"ids": ensure_bundle_ids, "signing": signing, "secrets": upload_secrets, "renew": renew}
+    parser.add_argument("command", choices=list(commands))
+    commands[parser.parse_args().command]()
 
 
 main()
