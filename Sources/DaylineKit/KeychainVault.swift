@@ -9,17 +9,22 @@ struct KeychainVault: Sendable {
         self.accessGroup = accessGroup
     }
 
-    func read() -> GoogleCredential? {
+    func read() -> [GoogleCredential] {
         var query = itemQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return try? JSONDecoder().decode(GoogleCredential.self, from: data)
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return [] }
+        let decoder = JSONDecoder()
+        if let credentials = try? decoder.decode([GoogleCredential].self, from: data) {
+            return credentials
+        }
+        return (try? decoder.decode(GoogleCredential.self, from: data)).map { [$0] } ?? []
     }
 
-    func save(_ credential: GoogleCredential) throws(CalendarServiceError) {
-        guard let data = try? JSONEncoder().encode(credential) else { throw .failed("Dayline could not save your Google sign-in.") }
+    func save(_ credentials: [GoogleCredential]) throws(CalendarServiceError) {
+        guard !credentials.isEmpty else { return delete() }
+        guard let data = try? JSONEncoder().encode(credentials) else { throw .failed("Dayline could not save your Google sign-in.") }
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,

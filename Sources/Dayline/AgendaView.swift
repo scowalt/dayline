@@ -70,11 +70,11 @@ struct AgendaView: View {
                     }
                 }
             }
-        } else if let issue = state.issue, !state.isRefreshing {
+        } else if let issue = state.firstIssue?.error, !state.isRefreshing {
             ContentUnavailableView {
                 Label("Couldn't Load Your Calendar", systemImage: issue.symbolName)
             } description: {
-                Text(issue.statusMessage ?? "")
+                Text(state.issueMessage ?? "")
             } actions: {
                 Button("Try Again") {
                     Task { await model.refresh() }
@@ -100,7 +100,7 @@ struct AgendaView: View {
             return "Updating…"
         }
         let updated = state.snapshot.map { updatedText(fetchedAt: $0.fetchedAt, now: now) }
-        return [state.issue?.statusMessage, updated].compactMap(\.self).joined(separator: " · ")
+        return [state.issueMessage, updated].compactMap(\.self).joined(separator: " · ")
     }
 
     private func updatedText(fetchedAt: Date, now: Date) -> String {
