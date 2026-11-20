@@ -1,5 +1,6 @@
 import DaylineCore
 import DaylineKit
+import Foundation
 import Observation
 import WidgetKit
 
@@ -16,11 +17,13 @@ final class AppModel {
         var account: Account
         var snapshot: Snapshot?
         var isRefreshing = false
+        var isRefreshQueued = false
         var issue: CalendarServiceError?
     }
 
     private(set) var phase: Phase = .launching
     private(set) var visibility: CalendarVisibility
+    private(set) var pendingLink: DeepLink?
     let isDemo: Bool
     private let service: any CalendarService
     private let preferences: CalendarPreferences
@@ -29,6 +32,7 @@ final class AppModel {
         self.service = service
         self.preferences = preferences
         self.isDemo = isDemo
+        preferences.usesDemoData = isDemo
         visibility = preferences.visibility
     }
 
@@ -43,6 +47,15 @@ final class AppModel {
     var snapshot: Snapshot? {
         guard case .signedIn(let state) = phase else { return nil }
         return state.snapshot
+    }
+
+    var account: Account? {
+        guard case .signedIn(let state) = phase else { return nil }
+        return state.account
+    }
+
+    func event(_ id: EventID) -> CalendarEvent? {
+        snapshot?.events.first { $0.id == id }
     }
 
     var visibleEvents: [CalendarEvent] {
@@ -65,6 +78,9 @@ final class AppModel {
             let session = try await service.signIn(authorize: authorize)
             phase = .signedIn(SignedIn(account: session.account, snapshot: session.snapshot))
             WidgetCenter.shared.reloadAllTimelines()
+            if session.snapshot == nil {
+                await refresh()
+            }
         } catch .cancelled {
             phase = .signedOut(nil)
         } catch {
@@ -73,29 +89,49 @@ final class AppModel {
     }
 
     func refresh() async {
-        guard case .signedIn(let state) = phase, !state.isRefreshing else { return }
-        update { $0.isRefreshing = true }
-        do throws(CalendarServiceError) {
-            let snapshot = try await service.refresh()
-            update {
-                $0.account = snapshot.account
-                $0.snapshot = snapshot
-                $0.issue = nil
-            }
-            WidgetCenter.shared.reloadAllTimelines()
-        } catch .sessionExpired {
-            phase = .signedOut(.sessionExpired)
-            WidgetCenter.shared.reloadAllTimelines()
-        } catch {
-            update { $0.issue = error }
+        guard case .signedIn(let state) = phase else { return }
+        guard !state.isRefreshing else {
+            update { $0.isRefreshQueued = true }
+            return
         }
+        update { $0.isRefreshing = true }
+        repeat {
+            update { $0.isRefreshQueued = false }
+            do throws(CalendarServiceError) {
+                let snapshot = try await service.refresh()
+                update {
+                    $0.account = snapshot.account
+                    $0.snapshot = snapshot
+                    $0.issue = nil
+                }
+                WidgetCenter.shared.reloadAllTimelines()
+            } catch .sessionExpired {
+                phase = .signedOut(.sessionExpired)
+                WidgetCenter.shared.reloadAllTimelines()
+                return
+            } catch {
+                update { $0.issue = error }
+            }
+        } while isRefreshQueued
         update { $0.isRefreshing = false }
+    }
+
+    private var isRefreshQueued: Bool {
+        guard case .signedIn(let state) = phase else { return false }
+        return state.isRefreshQueued
+    }
+
+    func refreshIfStale(maxAge: TimeInterval = 5 * 60) async {
+        guard case .signedIn(let state) = phase else { return }
+        if let fetchedAt = state.snapshot?.fetchedAt, Date.now.timeIntervalSince(fetchedAt) < maxAge { return }
+        await refresh()
     }
 
     func signOut() async {
         await service.signOut()
         preferences.reset()
         visibility = CalendarVisibility()
+        pendingLink = nil
         phase = .signedOut(nil)
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -104,6 +140,18 @@ final class AppModel {
         visibility.overrides[calendar] = visible
         preferences.visibility = visibility
         WidgetCenter.shared.reloadAllTimelines()
+        if visible {
+            Task { await refresh() }
+        }
+    }
+
+    func open(_ link: DeepLink) {
+        pendingLink = link
+    }
+
+    func takePendingLink() -> DeepLink? {
+        defer { pendingLink = nil }
+        return pendingLink
     }
 
     private func update(_ change: (inout SignedIn) -> Void) {
