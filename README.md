@@ -50,6 +50,22 @@ The `-demo` launch argument signs in to sample data instead of Google.
 
 ## Install on an iPhone
 
+### TestFlight
+
+Every push to `main`, and a scheduled run on the 1st and 15th of each month, builds Dayline, signs it for the App Store and uploads it to TestFlight. The TestFlight app on the phone installs each build as it arrives. A TestFlight build stops opening 90 days after upload, and the scheduled runs keep a fresh one there. GitHub turns off scheduled workflows in a public repository after 60 days without activity, so check the Actions tab if the repository goes quiet.
+
+One-time setup, with an App Store Connect team API key (App Manager role) in `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_PATH`:
+
+1. `scripts/appstore ids` registers the App IDs `com.scowalt.dayline` and `com.scowalt.dayline.widget` with App Groups turned on.
+2. In the developer portal, configure App Groups on both App IDs to include `group.com.scowalt.dayline`. The API can't do this.
+3. In App Store Connect, create the app with bundle ID `com.scowalt.dayline`, and add yourself to an internal testing group.
+4. `scripts/appstore signing` creates an Apple Distribution certificate and the App Store profiles in `~/.config/dayline/signing`.
+5. `scripts/appstore secrets` stores the key, certificate and profiles in the `testflight` environment, which only `main` can use.
+
+The certificate expires after a year. Run steps 4 and 5 again before then.
+
+### xtool
+
 Each `vX.Y.Z` tag publishes an unsigned `Dayline.ipa` on the [releases page](https://github.com/scowalt/dayline/releases). Sign it and install it over USB or Wi-Fi with xtool:
 
 ```sh
