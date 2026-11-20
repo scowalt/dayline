@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.webAuthenticationSession) private var webAuthenticationSession
     @State private var accountToSignOut: Account?
+    @State private var titleToHide = ""
 
     var body: some View {
         NavigationStack {
@@ -15,6 +16,7 @@ struct SettingsView: View {
                 ForEach(model.accounts) { account in
                     accountSection(account)
                 }
+                hiddenTitlesSection
                 addAccountSection
             }
             .navigationTitle("Settings")
@@ -71,6 +73,34 @@ struct SettingsView: View {
                 Text("Hidden calendars are also hidden from Dayline widgets.")
             }
         }
+    }
+
+    private var hiddenTitlesSection: some View {
+        Section {
+            ForEach(model.visibility.hiddenTitles, id: \.self) { title in
+                Text(title)
+            }
+            .onDelete { offsets in
+                offsets.map { model.visibility.hiddenTitles[$0] }.forEach(model.showEvents(titled:))
+            }
+            HStack {
+                TextField("Event title, like Personal event", text: $titleToHide)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit(hideTitle)
+                Button("Hide", action: hideTitle)
+                    .disabled(titleToHide.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        } header: {
+            Text("Hidden Events")
+        } footer: {
+            Text("Events with these exact titles are hidden from the agenda and widgets. Capitalization doesn't matter.")
+        }
+    }
+
+    private func hideTitle() {
+        model.hideEvents(titled: titleToHide)
+        titleToHide = ""
     }
 
     private var addAccountSection: some View {

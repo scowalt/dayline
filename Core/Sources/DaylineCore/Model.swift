@@ -207,7 +207,7 @@ public struct Snapshot: Hashable, Codable, Sendable {
 
     public func events(visibleWith visibility: CalendarVisibility) -> [CalendarEvent] {
         let visible = Set(calendars.filter(visibility.isVisible).map(\.id))
-        return events.filter { visible.contains($0.calendarID) }
+        return events.filter { visible.contains($0.calendarID) && !visibility.hides(title: $0.title) }
     }
 
     public func removing(_ account: Account.ID) -> Snapshot {
@@ -224,12 +224,43 @@ public struct Snapshot: Hashable, Codable, Sendable {
 
 public struct CalendarVisibility: Hashable, Codable, Sendable {
     public var overrides: [CalendarID: Bool]
+    public private(set) var hiddenTitles: [String]
 
-    public init(overrides: [CalendarID: Bool] = [:]) {
+    public init(overrides: [CalendarID: Bool] = [:], hiddenTitles: [String] = []) {
         self.overrides = overrides
+        self.hiddenTitles = []
+        hiddenTitles.forEach { hide(title: $0) }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            overrides: try container.decodeIfPresent([CalendarID: Bool].self, forKey: .overrides) ?? [:],
+            hiddenTitles: try container.decodeIfPresent([String].self, forKey: .hiddenTitles) ?? []
+        )
     }
 
     public func isVisible(_ calendar: CalendarInfo) -> Bool {
         overrides[calendar.id] ?? calendar.isSelectedInGoogle
+    }
+
+    public func hides(title: String) -> Bool {
+        let key = Self.matchKey(title)
+        return hiddenTitles.contains { Self.matchKey($0) == key }
+    }
+
+    public mutating func hide(title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !hides(title: trimmed) else { return }
+        hiddenTitles.append(trimmed)
+    }
+
+    public mutating func show(title: String) {
+        let key = Self.matchKey(title)
+        hiddenTitles.removeAll { Self.matchKey($0) == key }
+    }
+
+    private static func matchKey(_ title: String) -> String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines).folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
     }
 }
