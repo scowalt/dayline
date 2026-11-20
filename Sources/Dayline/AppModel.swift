@@ -125,6 +125,9 @@ final class AppModel {
         visibility.overrides[calendar] = visible
         preferences.visibility = visibility
         WidgetCenter.shared.reloadAllTimelines()
+        if visible {
+            Task { await refresh() }
+        }
     }
 
     func open(_ link: DeepLink) {
