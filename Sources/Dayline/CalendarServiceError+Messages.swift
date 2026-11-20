@@ -9,8 +9,8 @@ extension CalendarServiceError {
             "Your Google session ended. Sign in again to see your calendar."
         case .offline:
             "You're offline. Connect to the internet and try again."
-        case .failed:
-            "Google sign-in didn't finish. Please try again."
+        case .failed(let message):
+            message
         }
     }
 
