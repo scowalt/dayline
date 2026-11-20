@@ -18,10 +18,7 @@ public struct SnapshotStore: Sendable {
     }
 
     public func latest() -> Snapshot? {
-        Writer.allCases
-            .compactMap { try? Data(contentsOf: url(for: $0)) }
-            .compactMap { try? JSONDecoder().decode(Snapshot.self, from: $0) }
-            .max { $0.fetchedAt < $1.fetchedAt }
+        Writer.allCases.compactMap(stored(by:)).max { $0.fetchedAt < $1.fetchedAt }
     }
 
     public func save(_ snapshot: Snapshot, as writer: Writer) throws {
@@ -33,6 +30,23 @@ public struct SnapshotStore: Sendable {
         for writer in Writer.allCases {
             try? FileManager.default.removeItem(at: url(for: writer))
         }
+    }
+
+    public func remove(_ account: Account.ID) {
+        for writer in Writer.allCases {
+            guard let snapshot = stored(by: writer) else { continue }
+            let remaining = snapshot.removing(account)
+            if remaining.accounts.isEmpty {
+                try? FileManager.default.removeItem(at: url(for: writer))
+            } else {
+                try? save(remaining, as: writer)
+            }
+        }
+    }
+
+    private func stored(by writer: Writer) -> Snapshot? {
+        guard let data = try? Data(contentsOf: url(for: writer)) else { return nil }
+        return try? JSONDecoder().decode(Snapshot.self, from: data)
     }
 
     private func url(for writer: Writer) -> URL {

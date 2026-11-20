@@ -66,6 +66,7 @@ public enum GoogleOAuth {
             ("code_challenge", pkce.challenge),
             ("code_challenge_method", "S256"),
             ("state", state),
+            ("prompt", "select_account"),
         ]
         if let loginHint {
             query.append(("login_hint", loginHint))

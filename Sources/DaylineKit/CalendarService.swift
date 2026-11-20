@@ -2,12 +2,14 @@ import DaylineCore
 import Foundation
 
 public struct Session: Hashable, Sendable {
-    public var account: Account
+    public var accounts: [Account]
     public var snapshot: Snapshot?
+    public var issues: [Account.ID: CalendarServiceError]
 
-    public init(account: Account, snapshot: Snapshot?) {
-        self.account = account
+    public init(accounts: [Account], snapshot: Snapshot?, issues: [Account.ID: CalendarServiceError] = [:]) {
+        self.accounts = accounts
         self.snapshot = snapshot
+        self.issues = issues
     }
 }
 
@@ -22,7 +24,7 @@ public typealias WebAuthorizer = @MainActor @Sendable (_ url: URL, _ callbackSch
 
 public protocol CalendarService: Sendable {
     func restore() async -> Session?
-    func signIn(authorize: WebAuthorizer) async throws(CalendarServiceError) -> Session
-    func refresh() async throws(CalendarServiceError) -> Snapshot
-    func signOut() async
+    func signIn(authorize: WebAuthorizer, loginHint: String?) async throws(CalendarServiceError) -> Session
+    func refresh() async throws(CalendarServiceError) -> Session
+    func signOut(_ account: Account.ID) async -> Session?
 }

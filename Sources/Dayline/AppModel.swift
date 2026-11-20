@@ -14,11 +14,37 @@ final class AppModel {
     }
 
     struct SignedIn: Equatable {
-        var account: Account
+        var accounts: [Account]
         var snapshot: Snapshot?
+        var issues: [Account.ID: CalendarServiceError]
         var isRefreshing = false
         var isRefreshQueued = false
-        var issue: CalendarServiceError?
+        var isAddingAccount = false
+        var addAccountIssue: CalendarServiceError?
+
+        init(_ session: Session) {
+            accounts = session.accounts
+            snapshot = session.snapshot
+            issues = session.issues
+        }
+
+        mutating func adopt(_ session: Session) {
+            accounts = session.accounts
+            snapshot = session.snapshot
+            issues = session.issues
+        }
+
+        var firstIssue: (account: Account, error: CalendarServiceError)? {
+            accounts.lazy.compactMap { account in issues[account.id].map { (account, $0) } }.first
+        }
+
+        var issueMessage: String? {
+            guard let (account, error) = firstIssue else { return nil }
+            if error == .sessionExpired, accounts.count > 1 {
+                return "Session ended for \(account.email)"
+            }
+            return error.statusMessage
+        }
     }
 
     private(set) var phase: Phase = .launching
@@ -44,15 +70,16 @@ final class AppModel {
         }
     }
 
-    var snapshot: Snapshot? {
+    private var signedIn: SignedIn? {
         guard case .signedIn(let state) = phase else { return nil }
-        return state.snapshot
+        return state
     }
 
-    var account: Account? {
-        guard case .signedIn(let state) = phase else { return nil }
-        return state.account
-    }
+    var snapshot: Snapshot? { signedIn?.snapshot }
+    var accounts: [Account] { signedIn?.accounts ?? [] }
+    var issues: [Account.ID: CalendarServiceError] { signedIn?.issues ?? [:] }
+    var isAddingAccount: Bool { signedIn?.isAddingAccount ?? false }
+    var addAccountIssue: CalendarServiceError? { signedIn?.addAccountIssue }
 
     func event(_ id: EventID) -> CalendarEvent? {
         snapshot?.events.first { $0.id == id }
@@ -68,15 +95,19 @@ final class AppModel {
             phase = .signedOut(nil)
             return
         }
-        phase = .signedIn(SignedIn(account: session.account, snapshot: session.snapshot))
+        phase = .signedIn(SignedIn(session))
         await refresh()
     }
 
-    func signIn(authorize: @escaping WebAuthorizer) async {
+    func signIn(authorize: @escaping WebAuthorizer, loginHint: String? = nil) async {
+        if case .signedIn = phase {
+            await addAccount(authorize: authorize, loginHint: loginHint)
+            return
+        }
         phase = .signingIn
         do throws(CalendarServiceError) {
-            let session = try await service.signIn(authorize: authorize)
-            phase = .signedIn(SignedIn(account: session.account, snapshot: session.snapshot))
+            let session = try await service.signIn(authorize: authorize, loginHint: loginHint)
+            phase = .signedIn(SignedIn(session))
             WidgetCenter.shared.reloadAllTimelines()
             if session.snapshot == nil {
                 await refresh()
@@ -85,6 +116,27 @@ final class AppModel {
             phase = .signedOut(nil)
         } catch {
             phase = .signedOut(error)
+        }
+    }
+
+    private func addAccount(authorize: @escaping WebAuthorizer, loginHint: String?) async {
+        update {
+            $0.isAddingAccount = true
+            $0.addAccountIssue = nil
+        }
+        do throws(CalendarServiceError) {
+            let session = try await service.signIn(authorize: authorize, loginHint: loginHint)
+            update {
+                $0.adopt(session)
+                $0.isAddingAccount = false
+                $0.isRefreshQueued = $0.isRefreshing
+            }
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch {
+            update {
+                $0.isAddingAccount = false
+                $0.addAccountIssue = error == .cancelled ? nil : error
+            }
         }
     }
 
@@ -98,19 +150,14 @@ final class AppModel {
         repeat {
             update { $0.isRefreshQueued = false }
             do throws(CalendarServiceError) {
-                let snapshot = try await service.refresh()
-                update {
-                    $0.account = snapshot.account
-                    $0.snapshot = snapshot
-                    $0.issue = nil
-                }
+                let session = try await service.refresh()
+                update { $0.adopt(session) }
                 WidgetCenter.shared.reloadAllTimelines()
-            } catch .sessionExpired {
-                phase = .signedOut(.sessionExpired)
+            } catch {
+                guard case .signedIn = phase else { return }
+                phase = .signedOut(error)
                 WidgetCenter.shared.reloadAllTimelines()
                 return
-            } catch {
-                update { $0.issue = error }
             }
         } while isRefreshQueued
         update { $0.isRefreshing = false }
@@ -127,12 +174,19 @@ final class AppModel {
         await refresh()
     }
 
-    func signOut() async {
-        await service.signOut()
-        preferences.reset()
-        visibility = CalendarVisibility()
-        pendingLink = nil
-        phase = .signedOut(nil)
+    func signOut(_ account: Account.ID) async {
+        if let session = await service.signOut(account) {
+            update { state in
+                let issues = state.issues.filter { id, _ in session.accounts.contains { $0.id == id } }
+                state.adopt(session)
+                state.issues = issues
+            }
+        } else {
+            preferences.reset()
+            visibility = CalendarVisibility()
+            pendingLink = nil
+            phase = .signedOut(nil)
+        }
         WidgetCenter.shared.reloadAllTimelines()
     }
 

@@ -1,3 +1,4 @@
+import AuthenticationServices
 import DaylineCore
 import DaylineKit
 import SwiftUI
@@ -5,53 +6,16 @@ import SwiftUI
 struct SettingsView: View {
     let model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var isConfirmingSignOut = false
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @State private var accountToSignOut: Account?
 
     var body: some View {
         NavigationStack {
             Form {
-                if let account = model.account {
-                    Section {
-                        AccountRow(account: account)
-                    }
+                ForEach(model.accounts) { account in
+                    accountSection(account)
                 }
-                if !calendars.isEmpty {
-                    Section {
-                        ForEach(calendars) { calendar in
-                            Toggle(isOn: visibility(of: calendar)) {
-                                HStack(spacing: 12) {
-                                    Circle()
-                                        .fill(Color(calendar.color))
-                                        .frame(width: 12, height: 12)
-                                        .accessibilityHidden(true)
-                                    Text(calendar.title)
-                                        .lineLimit(1)
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("Calendars")
-                    } footer: {
-                        Text("Hidden calendars are also hidden from Dayline widgets.")
-                    }
-                }
-                Section {
-                    Button("Sign Out", role: .destructive) {
-                        isConfirmingSignOut = true
-                    }
-                    .confirmationDialog("Sign out of Google?", isPresented: $isConfirmingSignOut, titleVisibility: .visible) {
-                        Button("Sign Out", role: .destructive) {
-                            dismiss()
-                            Task { await model.signOut() }
-                        }
-                    } message: {
-                        Text("Dayline will remove your calendar from this iPhone and its widgets.")
-                    }
-                } footer: {
-                    Text("Dayline \(Self.version)")
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 24)
-                }
+                addAccountSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -62,11 +26,88 @@ struct SettingsView: View {
                     }
                 }
             }
+            .confirmationDialog(
+                "Sign out of this account?",
+                isPresented: Binding(get: { accountToSignOut != nil }, set: { if !$0 { accountToSignOut = nil } }),
+                titleVisibility: .visible,
+                presenting: accountToSignOut
+            ) { account in
+                Button("Sign Out", role: .destructive) {
+                    signOut(account)
+                }
+            } message: { account in
+                Text("Dayline will remove \(account.email) from this iPhone and its widgets.")
+            }
         }
     }
 
-    private var calendars: [CalendarInfo] {
-        (model.snapshot?.calendars ?? []).sorted { lhs, rhs in
+    private func accountSection(_ account: Account) -> some View {
+        let issue = model.issues[account.id]
+        return Section {
+            AccountRow(account: account, issue: issue)
+            if issue == .sessionExpired {
+                Button("Sign In Again") {
+                    Task { await model.signIn(authorize: webAuthenticationSession.authorize, loginHint: account.email) }
+                }
+                .disabled(model.isAddingAccount)
+            }
+            ForEach(calendars(of: account)) { calendar in
+                Toggle(isOn: visibility(of: calendar)) {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(Color(calendar.color))
+                            .frame(width: 12, height: 12)
+                            .accessibilityHidden(true)
+                        Text(calendar.title)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Button("Sign Out", role: .destructive) {
+                accountToSignOut = account
+            }
+        } footer: {
+            if account.id == model.accounts.last?.id {
+                Text("Hidden calendars are also hidden from Dayline widgets.")
+            }
+        }
+    }
+
+    private var addAccountSection: some View {
+        Section {
+            Button {
+                Task { await model.signIn(authorize: webAuthenticationSession.authorize) }
+            } label: {
+                HStack {
+                    Text("Add Google Account")
+                    if model.isAddingAccount {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(model.isAddingAccount)
+        } footer: {
+            VStack(alignment: .leading, spacing: 24) {
+                if let message = model.addAccountIssue?.signInMessage, let issue = model.addAccountIssue {
+                    Label(message, systemImage: issue.symbolName)
+                }
+                Text("Dayline \(Self.version)")
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func signOut(_ account: Account) {
+        if model.accounts.count == 1 {
+            dismiss()
+        }
+        Task { await model.signOut(account.id) }
+    }
+
+    private func calendars(of account: Account) -> [CalendarInfo] {
+        (model.snapshot?.calendars(of: account.id) ?? []).sorted { lhs, rhs in
             if lhs.isPrimary != rhs.isPrimary { return lhs.isPrimary }
             return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
         }
@@ -90,6 +131,7 @@ struct SettingsView: View {
 
 private struct AccountRow: View {
     let account: Account
+    let issue: CalendarServiceError?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -106,6 +148,11 @@ private struct AccountRow: View {
                     Text(account.email)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
+                if let issue, let message = issue.signInMessage {
+                    Label(message, systemImage: issue.symbolName)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
                 }
             }
         }
