@@ -29,9 +29,102 @@ struct ModelTests {
         let events = [shown, hidden].map {
             CalendarEvent(id: EventID(calendar: $0.id, event: "e"), title: $0.title, time: .timed(start: now, end: now))
         }
-        let snapshot = Snapshot(account: Account(email: "a@b.c"), calendars: [shown, hidden], events: events, range: DateInterval(start: now, duration: 0), fetchedAt: now)
+        let snapshot = Snapshot(
+            accounts: [AccountSnapshot(account: Account(email: "a@b.c"), calendars: [shown, hidden], events: events)],
+            range: DateInterval(start: now, duration: 0),
+            fetchedAt: now
+        )
 
         #expect(snapshot.events(visibleWith: CalendarVisibility()).map(\.title) == ["A"])
         #expect(snapshot.events(visibleWith: CalendarVisibility(overrides: [hidden.id: true, shown.id: false])).map(\.title) == ["B"])
+    }
+}
+
+struct MultiAccountSnapshotTests {
+    let now = Date(timeIntervalSince1970: 1_790_000_000)
+    let first = Account(email: "first@example.com")
+    let second = Account(email: "second@example.com")
+    let third = Account(email: "third@example.com")
+
+    func calendar(_ id: String, title: String? = nil) -> CalendarInfo {
+        CalendarInfo(id: CalendarID(rawValue: id), title: title ?? id, color: RGBColor(red: 0, green: 0, blue: 0), isPrimary: false, isSelectedInGoogle: true)
+    }
+
+    func event(_ calendar: CalendarInfo, _ id: String, title: String) -> CalendarEvent {
+        CalendarEvent(id: EventID(calendar: calendar.id, event: id), title: title, time: .timed(start: now, end: now))
+    }
+
+    func snapshot(_ accounts: [AccountSnapshot]) -> Snapshot {
+        Snapshot(accounts: accounts, range: DateInterval(start: now, duration: 60), fetchedAt: now)
+    }
+
+    var sharedSnapshot: Snapshot {
+        let own = calendar("own")
+        let shared = calendar("shared", title: "from first")
+        let sharedCopy = calendar("shared", title: "from second")
+        let other = calendar("other")
+        return snapshot([
+            AccountSnapshot(
+                account: first,
+                calendars: [own, shared],
+                events: [event(own, "1", title: "own"), event(shared, "2", title: "shared by first")]
+            ),
+            AccountSnapshot(
+                account: second,
+                calendars: [sharedCopy, other],
+                events: [event(sharedCopy, "2", title: "shared by second"), event(other, "3", title: "other")]
+            ),
+        ])
+    }
+
+    @Test func aSharedCalendarAndItsEventsComeFromTheFirstAccount() {
+        let merged = sharedSnapshot
+
+        #expect(merged.calendars.map(\.id.rawValue) == ["own", "shared", "other"])
+        #expect(merged.calendar(CalendarID(rawValue: "shared"))?.title == "from first")
+        #expect(merged.events.map(\.title) == ["own", "shared by first", "other"])
+    }
+
+    @Test func anAccountDoesNotListACalendarAnotherAccountOwns() {
+        let merged = sharedSnapshot
+
+        #expect(merged.calendars(of: first.id).map(\.id.rawValue) == ["own", "shared"])
+        #expect(merged.calendars(of: second.id).map(\.id.rawValue) == ["other"])
+        #expect(merged.calendars(of: third.id).isEmpty)
+    }
+
+    @Test func removingTheOwnerHandsTheSharedCalendarToTheNextAccount() {
+        let remaining = sharedSnapshot.removing(first.id)
+
+        #expect(remaining.accounts.map(\.account) == [second])
+        #expect(remaining.calendar(CalendarID(rawValue: "shared"))?.title == "from second")
+        #expect(remaining.events.map(\.title) == ["shared by second", "other"])
+        #expect(remaining.fetchedAt == sharedSnapshot.fetchedAt)
+    }
+
+    @Test func visibilityAppliesAcrossAccounts() {
+        let hidden = CalendarVisibility(overrides: [CalendarID(rawValue: "shared"): false])
+
+        #expect(sharedSnapshot.events(visibleWith: hidden).map(\.title) == ["own", "other"])
+    }
+
+    @Test func theSampleSharesTheFamilyCalendarAcrossTwoAccounts() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let sample = Snapshot.sample(now: now, calendar: calendar)
+        let family = CalendarID(rawValue: "family@group.calendar.google.com")
+
+        #expect(sample.accounts.count == 2)
+        #expect(sample.accounts.filter { $0.calendars.contains { $0.id == family } }.count == 2)
+        #expect(sample.calendars.filter { $0.id == family }.count == 1)
+        #expect(Set(sample.events.map(\.id)).count == sample.events.count)
+    }
+
+    @Test func onlyAccountsRangeAndFetchTimeAreEncoded() throws {
+        let data = try JSONEncoder().encode(sharedSnapshot)
+        let keys = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]).keys
+
+        #expect(Set(keys) == ["accounts", "range", "fetchedAt"])
+        #expect(try JSONDecoder().decode(Snapshot.self, from: data) == sharedSnapshot)
     }
 }

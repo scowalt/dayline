@@ -44,10 +44,26 @@ private struct SampleBuilder {
     func snapshot() -> Snapshot {
         let start = today.start(in: calendar)
         let end = today.adding(days: 14, in: calendar).start(in: calendar)
+        let all = events()
+        func eventsOf(_ calendars: [CalendarInfo]) -> [CalendarEvent] {
+            let ids = Set(calendars.map(\.id))
+            return all.filter { ids.contains($0.calendarID) }
+        }
+        let personalCalendars = [personal, family]
+        let workCalendars = [work, holidays, family]
         return Snapshot(
-            account: Account(email: work.id.rawValue, name: "Alex Rivera"),
-            calendars: [work, personal, family, holidays],
-            events: events(),
+            accounts: [
+                AccountSnapshot(
+                    account: Account(email: "alex.rivera@gmail.com", name: "Alex Rivera"),
+                    calendars: personalCalendars,
+                    events: eventsOf(personalCalendars)
+                ),
+                AccountSnapshot(
+                    account: Account(email: work.id.rawValue, name: "Alex Rivera"),
+                    calendars: workCalendars,
+                    events: eventsOf(workCalendars)
+                ),
+            ],
             range: DateInterval(start: start, end: end),
             fetchedAt: now
         )

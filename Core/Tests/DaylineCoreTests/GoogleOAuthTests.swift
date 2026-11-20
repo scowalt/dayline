@@ -38,6 +38,7 @@ struct GoogleOAuthTests {
             "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
             "code_challenge_method": "S256",
             "state": "s+t/a=te",
+            "prompt": "select_account",
         ])
         let encodedQuery = try #require(components.percentEncodedQuery)
         #expect(!encodedQuery.contains("+"))

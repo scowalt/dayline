@@ -159,19 +159,46 @@ public struct Account: Hashable, Codable, Sendable {
     }
 }
 
-public struct Snapshot: Hashable, Codable, Sendable {
+extension Account: Identifiable {
+    public var id: String { email }
+}
+
+public struct AccountSnapshot: Hashable, Codable, Sendable {
     public var account: Account
     public var calendars: [CalendarInfo]
     public var events: [CalendarEvent]
-    public var range: DateInterval
-    public var fetchedAt: Date
 
-    public init(account: Account, calendars: [CalendarInfo], events: [CalendarEvent], range: DateInterval, fetchedAt: Date) {
+    public init(account: Account, calendars: [CalendarInfo], events: [CalendarEvent]) {
         self.account = account
         self.calendars = calendars
         self.events = events
+    }
+}
+
+public struct Snapshot: Hashable, Codable, Sendable {
+    public var accounts: [AccountSnapshot]
+    public var range: DateInterval
+    public var fetchedAt: Date
+
+    public init(accounts: [AccountSnapshot], range: DateInterval, fetchedAt: Date) {
+        self.accounts = accounts
         self.range = range
         self.fetchedAt = fetchedAt
+    }
+
+    public var calendars: [CalendarInfo] {
+        owned.flatMap(\.calendars)
+    }
+
+    public var events: [CalendarEvent] {
+        owned.flatMap { entry in
+            let ids = Set(entry.calendars.map(\.id))
+            return entry.account.events.filter { ids.contains($0.calendarID) }
+        }
+    }
+
+    public func calendars(of account: Account.ID) -> [CalendarInfo] {
+        owned.first { $0.account.account.id == account }?.calendars ?? []
     }
 
     public func calendar(_ id: CalendarID) -> CalendarInfo? {
@@ -181,6 +208,17 @@ public struct Snapshot: Hashable, Codable, Sendable {
     public func events(visibleWith visibility: CalendarVisibility) -> [CalendarEvent] {
         let visible = Set(calendars.filter(visibility.isVisible).map(\.id))
         return events.filter { visible.contains($0.calendarID) }
+    }
+
+    public func removing(_ account: Account.ID) -> Snapshot {
+        Snapshot(accounts: accounts.filter { $0.account.id != account }, range: range, fetchedAt: fetchedAt)
+    }
+
+    private var owned: [(account: AccountSnapshot, calendars: [CalendarInfo])] {
+        var claimed = Set<CalendarID>()
+        return accounts.map { account in
+            (account, account.calendars.filter { claimed.insert($0.id).inserted })
+        }
     }
 }
 
