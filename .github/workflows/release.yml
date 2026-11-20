@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  ipa:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      XTOOL_VERSION: 1.24.0
+      XTOOL_SHA256: a56e98d69dea02a97a17e609f0ae8771c57ffaab23f1d62513fd9ada222026b3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install xtool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xtool.app.zip" "https://github.com/xtool-org/xtool/releases/download/$XTOOL_VERSION/xtool.app.zip"
+          echo "$XTOOL_SHA256  $RUNNER_TEMP/xtool.app.zip" | shasum -a 256 -c
+          ditto -x -k "$RUNNER_TEMP/xtool.app.zip" "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xtool.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+      - name: Stamp the version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          version=0.0.0
+          if [[ $REF_TYPE == tag ]]; then version=${REF_NAME#v}; fi
+          for plist in Support/Dayline-Info.plist Support/DaylineWidget-Info.plist; do
+            plutil -replace CFBundleShortVersionString -string "$version" "$plist"
+            plutil -replace CFBundleVersion -string "$BUILD" "$plist"
+          done
+      - name: Build the unsigned device IPA
+        run: |
+          xtool dev build --configuration release --ipa
+          cd xtool && shasum -a 256 Dayline.ipa > Dayline.ipa.sha256
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: dayline-ipa
+          path: |
+            xtool/Dayline.ipa
+            xtool/Dayline.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" xtool/Dayline.ipa xtool/Dayline.ipa.sha256 --verify-tag --generate-notes
