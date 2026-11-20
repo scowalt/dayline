@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+signing=${DAYLINE_SIGNING_DIR:-$HOME/.config/dayline/signing}
+
+usage() {
+  cat >&2 <<'EOF'
+usage: scripts/testflight sign <unsigned.ipa> <signed.ipa>
+       scripts/testflight validate <signed.ipa>
+       scripts/testflight upload <signed.ipa>
+
+Runs on macOS with Xcode. sign reads distribution.p12, distribution.p12.password
+and <Product>.mobileprovision from $DAYLINE_SIGNING_DIR (default
+~/.config/dayline/signing, written by scripts/appstore signing). validate and
+upload read ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH.
+EOF
+  exit 2
+}
+
+stamp_toolchain() {
+  local plist=$1 sdk_version sdk_build xcode_version xcode_build major minor patch
+  sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
+  sdk_build=$(xcrun --sdk iphoneos --show-sdk-build-version)
+  read -r _ xcode_version < <(xcodebuild -version | sed -n 1p)
+  read -r _ _ xcode_build < <(xcodebuild -version | sed -n 2p)
+  IFS=. read -r major minor patch <<<"$xcode_version"
+  plutil -replace CFBundleSupportedPlatforms -json '["iPhoneOS"]' "$plist"
+  plutil -replace DTPlatformName -string iphoneos "$plist"
+  plutil -replace DTPlatformVersion -string "$sdk_version" "$plist"
+  plutil -replace DTPlatformBuild -string "$sdk_build" "$plist"
+  plutil -replace DTSDKName -string "iphoneos$sdk_version" "$plist"
+  plutil -replace DTSDKBuild -string "$sdk_build" "$plist"
+  plutil -replace DTXcode -string "$(printf '%d%d%d' "$major" "${minor:-0}" "${patch:-0}")" "$plist"
+  plutil -replace DTXcodeBuild -string "$xcode_build" "$plist"
+  plutil -replace DTCompiler -string com.apple.compilers.llvm.clang.1_0 "$plist"
+  plutil -replace BuildMachineOSBuild -string "$(sw_vers -buildVersion)" "$plist"
+}
+
+compile_icons() {
+  local app=$1 work=$2
+  xcrun actool "$root/Support/Assets.xcassets" \
+    --compile "$app" \
+    --platform iphoneos \
+    --minimum-deployment-target "$(plutil -extract MinimumOSVersion raw "$app/Info.plist")" \
+    --app-icon AppIcon \
+    --target-device iphone \
+    --target-device ipad \
+    --output-partial-info-plist "$work/icons.plist" \
+    --errors --warnings --output-format human-readable-text
+  plutil -remove CFBundleIconFile "$app/Info.plist" 2>/dev/null || true
+  rm -f "$app/AppIcon.png"
+  /usr/libexec/PlistBuddy -c "Merge $work/icons.plist" "$app/Info.plist"
+}
+
+write_entitlements() {
+  local bundle=$1 product=$2 output=$3 profile_plist team bundle_id
+  profile_plist="$output.profile.plist"
+  security cms -D -i "$signing/$product.mobileprovision" >"$profile_plist"
+  team=$(plutil -extract TeamIdentifier.0 raw "$profile_plist")
+  bundle_id=$(plutil -extract CFBundleIdentifier raw "$bundle/Info.plist")
+  plutil -convert xml1 -o "$output" "$root/Support/$product.entitlements"
+  plutil -replace application-identifier -string "$team.$bundle_id" "$output"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $team" "$output"
+  plutil -replace beta-reports-active -bool YES "$output"
+  plutil -replace get-task-allow -bool NO "$output"
+}
+
+work=
+keychain=
+user_keychains=()
+
+cleanup() {
+  if [[ -n $keychain ]]; then
+    security list-keychains -d user -s "${user_keychains[@]}"
+    security delete-keychain "$keychain" 2>/dev/null || true
+  fi
+  [[ -z $work ]] || rm -rf "$work"
+}
+
+sign() {
+  [[ $# -eq 2 ]] || usage
+  local unsigned=$1 signed password identity app bundle product line
+  signed=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
+  work=$(mktemp -d)
+  trap cleanup EXIT
+  while IFS= read -r line; do
+    user_keychains+=("$(sed -E 's/^[[:space:]]*"(.*)"$/\1/' <<<"$line")")
+  done < <(security list-keychains -d user)
+  [[ ${#user_keychains[@]} -gt 0 ]] || { echo "the user keychain search list is empty" >&2; exit 1; }
+
+  password=$(uuidgen)
+  keychain="$work/signing.keychain-db"
+  security create-keychain -p "$password" "$keychain"
+  security set-keychain-settings -lut 3600 "$keychain"
+  security unlock-keychain -p "$password" "$keychain"
+  security import "$signing/distribution.p12" -k "$keychain" \
+    -P "$(cat "$signing/distribution.p12.password")" -T /usr/bin/codesign >/dev/null
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+  security list-keychains -d user -s "$keychain" "${user_keychains[@]}"
+  identity=$(security find-identity -v -p codesigning "$keychain" | awk '/Apple Distribution/ { print $2; exit }')
+  [[ -n $identity ]] || { echo "no Apple Distribution identity in $signing/distribution.p12" >&2; exit 1; }
+
+  ditto -x -k "$unsigned" "$work/ipa"
+  app=$(echo "$work"/ipa/Payload/*.app)
+  compile_icons "$app" "$work"
+  for bundle in "$app"/PlugIns/*.appex "$app"; do
+    product=$(basename "${bundle%.*}")
+    stamp_toolchain "$bundle/Info.plist"
+    rm -rf "$bundle/_CodeSignature"
+    cp "$signing/$product.mobileprovision" "$bundle/embedded.mobileprovision"
+    write_entitlements "$bundle" "$product" "$work/$product.entitlements"
+    codesign --force --sign "$identity" --keychain "$keychain" \
+      --entitlements "$work/$product.entitlements" \
+      --generate-entitlement-der "$bundle"
+  done
+  codesign --verify --deep --strict "$app"
+  rm -f "$signed"
+  (cd "$work/ipa" && zip -qry "$signed" Payload)
+  echo "signed $signed"
+}
+
+submit() {
+  local mode=$1
+  shift
+  [[ $# -eq 1 ]] || usage
+  xcrun altool "$mode" -f "$1" -t ios \
+    --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --p8-file-path "$ASC_KEY_PATH"
+}
+
+case ${1:-} in
+  sign) shift; sign "$@" ;;
+  validate) shift; submit --validate-app "$@" ;;
+  upload) shift; submit --upload-app "$@" ;;
+  *) usage ;;
+esac
