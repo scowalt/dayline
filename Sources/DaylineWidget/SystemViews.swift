@@ -9,25 +9,21 @@ struct SmallUpNextView: View {
     let colors: CalendarColors
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            DateHeader(date: now)
-                .padding(.bottom, 6)
+        Group {
             if let focus = glance.focus {
-                EventRow(
-                    event: focus,
-                    color: colors.color(for: focus),
-                    detail: EventTimeText.detail(for: focus, inProgress: glance.isInProgress(focus), now: now),
-                    titleLines: 2
-                )
-                Spacer(minLength: 4)
-                let more = glance.remaining.count - 1
-                if more > 0 {
-                    Text("+\(more) more today")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
+                ViewThatFits(in: .vertical) {
+                    focusLayout(focus, compactHeader: false, titleLines: 2, showMore: true)
+                    focusLayout(focus, compactHeader: false, titleLines: 2, showMore: false)
+                    focusLayout(focus, compactHeader: true, titleLines: 2, showMore: true)
+                    focusLayout(focus, compactHeader: true, titleLines: 2, showMore: false)
+                    focusLayout(focus, compactHeader: true, titleLines: 1, showMore: false)
                 }
             } else {
-                dayIsClear
+                VStack(alignment: .leading, spacing: 0) {
+                    DateHeader(date: now)
+                        .padding(.bottom, 6)
+                    dayIsClear
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -36,6 +32,40 @@ struct SmallUpNextView: View {
 
     private var mainEvent: CalendarEvent? {
         glance.focus ?? glance.nextDay.timed.first
+    }
+
+    private func focusLayout(_ focus: CalendarEvent, compactHeader: Bool, titleLines: Int, showMore: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DateHeader(date: now, compact: compactHeader)
+                .padding(.bottom, compactHeader ? 4 : 6)
+            row(focus, titleLines: titleLines)
+            if showMore {
+                Spacer(minLength: 4)
+                moreToday
+            }
+        }
+    }
+
+    private func row(_ event: CalendarEvent, titleLines: Int) -> some View {
+        let inProgress = glance.isInProgress(event)
+        return EventRow(
+            event: event,
+            color: colors.color(for: event),
+            detail: EventTimeText.detail(for: event, inProgress: inProgress, now: now),
+            shortDetail: EventTimeText.compact(for: event, inProgress: inProgress, now: now),
+            titleLines: titleLines
+        )
+    }
+
+    @ViewBuilder
+    private var moreToday: some View {
+        let more = glance.remaining.count - 1
+        if more > 0 {
+            Text("+\(more) more today")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
     }
 
     @ViewBuilder
@@ -55,11 +85,7 @@ struct SmallUpNextView: View {
         if let next = glance.nextDay.timed.first {
             VStack(alignment: .leading, spacing: 3) {
                 SectionHeading(title: "Tomorrow")
-                EventRow(
-                    event: next,
-                    color: colors.color(for: next),
-                    detail: EventTimeText.detail(for: next, inProgress: false, now: now)
-                )
+                row(next, titleLines: 1)
             }
         }
     }

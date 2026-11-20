@@ -5,21 +5,38 @@ import WidgetKit
 
 struct DateHeader: View {
     let date: Date
+    var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(date, format: .dateTime.weekday(.wide))
-                .textCase(.uppercase)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.red)
-                .widgetAccentable()
-            Text(date, format: .dateTime.day())
-                .font(.title.weight(.regular))
-                .monospacedDigit()
+        Group {
+            if compact {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    weekday
+                    day.font(.headline)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    weekday
+                    day.font(.title.weight(.regular))
+                }
+            }
         }
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(date, format: .dateTime.weekday(.wide).month(.wide).day()))
+    }
+
+    private var weekday: some View {
+        Text(date, format: .dateTime.weekday(.wide))
+            .textCase(.uppercase)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.red)
+            .widgetAccentable()
+    }
+
+    private var day: Text {
+        Text(date, format: .dateTime.day())
+            .monospacedDigit()
     }
 }
 
@@ -68,6 +85,7 @@ struct EventRow: View {
     let event: CalendarEvent
     let color: RGBColor?
     let detail: String
+    var shortDetail: String?
     var titleLines = 1
 
     var body: some View {
@@ -75,10 +93,15 @@ struct EventRow: View {
             Text(event.title)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(titleLines)
-            Text(detail)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            ViewThatFits(in: .horizontal) {
+                Text(detail)
+                if let shortDetail {
+                    Text(shortDetail)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .calendarBar(color)
@@ -125,10 +148,7 @@ enum EventTimeText {
         let calendar = Calendar.current
         guard case .timed(let start, let end) = event.time else { return String(localized: "All day") }
         if inProgress {
-            let until = calendar.isDate(end, inSameDayAs: now)
-                ? end.formatted(date: .omitted, time: .shortened)
-                : end.formatted(.dateTime.weekday(.abbreviated).hour().minute())
-            return String(localized: "Now · until \(until)")
+            return String(localized: "Now · until \(until(end, now: now))")
         }
         if start == end {
             return start.formatted(date: .omitted, time: .shortened)
@@ -137,6 +157,20 @@ enum EventTimeText {
             return (start..<end).formatted(.interval.hour().minute())
         }
         return "\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))"
+    }
+
+    static func compact(for event: CalendarEvent, inProgress: Bool, now: Date) -> String {
+        guard case .timed(let start, let end) = event.time else { return String(localized: "All day") }
+        if inProgress {
+            return String(localized: "Until \(until(end, now: now))")
+        }
+        return start.formatted(date: .omitted, time: .shortened)
+    }
+
+    private static func until(_ end: Date, now: Date) -> String {
+        Calendar.current.isDate(end, inSameDayAs: now)
+            ? end.formatted(date: .omitted, time: .shortened)
+            : end.formatted(.dateTime.weekday(.abbreviated).hour().minute())
     }
 
     static func clock(_ date: Date) -> String {
