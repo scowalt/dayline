@@ -1,0 +1,63 @@
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  schedule:
+    - cron: '23 14 1,15 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+
+jobs:
+  upload:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    environment: testflight
+    env:
+      XTOOL_VERSION: 1.24.0
+      XTOOL_SHA256: a56e98d69dea02a97a17e609f0ae8771c57ffaab23f1d62513fd9ada222026b3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install xtool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xtool.app.zip" "https://github.com/xtool-org/xtool/releases/download/$XTOOL_VERSION/xtool.app.zip"
+          echo "$XTOOL_SHA256  $RUNNER_TEMP/xtool.app.zip" | shasum -a 256 -c
+          ditto -x -k "$RUNNER_TEMP/xtool.app.zip" "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xtool.app/Contents/Resources/bin" >> "$GITHUB_PATH"
+      - name: Number the build
+        run: |
+          for plist in Support/Dayline-Info.plist Support/DaylineWidget-Info.plist; do
+            plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" "$plist"
+          done
+      - name: Build the device IPA
+        run: xtool dev build --configuration release --ipa
+      - name: Write the signing files
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          SIGNING_P12: ${{ secrets.SIGNING_P12 }}
+          SIGNING_P12_PASSWORD: ${{ secrets.SIGNING_P12_PASSWORD }}
+          PROFILE_DAYLINE: ${{ secrets.PROFILE_DAYLINE }}
+          PROFILE_DAYLINEWIDGET: ${{ secrets.PROFILE_DAYLINEWIDGET }}
+        run: |
+          signing="$RUNNER_TEMP/signing"
+          mkdir -m 700 "$signing"
+          printf %s "$SIGNING_P12" | base64 --decode > "$signing/distribution.p12"
+          printf %s "$SIGNING_P12_PASSWORD" > "$signing/distribution.p12.password"
+          printf %s "$PROFILE_DAYLINE" | base64 --decode > "$signing/Dayline.mobileprovision"
+          printf %s "$PROFILE_DAYLINEWIDGET" | base64 --decode > "$signing/DaylineWidget.mobileprovision"
+          printf %s "$ASC_KEY_P8" > "$signing/AuthKey.p8"
+          echo "DAYLINE_SIGNING_DIR=$signing" >> "$GITHUB_ENV"
+          echo "ASC_KEY_PATH=$signing/AuthKey.p8" >> "$GITHUB_ENV"
+      - name: Sign for the App Store
+        run: scripts/testflight sign xtool/Dayline.ipa "$RUNNER_TEMP/Dayline-AppStore.ipa"
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: scripts/testflight upload "$RUNNER_TEMP/Dayline-AppStore.ipa"
