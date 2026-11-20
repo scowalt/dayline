@@ -1,5 +1,6 @@
 import DaylineCore
 import DaylineKit
+import Foundation
 import Observation
 import WidgetKit
 
@@ -21,6 +22,7 @@ final class AppModel {
 
     private(set) var phase: Phase = .launching
     private(set) var visibility: CalendarVisibility
+    private(set) var pendingLink: DeepLink?
     let isDemo: Bool
     private let service: any CalendarService
     private let preferences: CalendarPreferences
@@ -45,6 +47,15 @@ final class AppModel {
         return state.snapshot
     }
 
+    var account: Account? {
+        guard case .signedIn(let state) = phase else { return nil }
+        return state.account
+    }
+
+    func event(_ id: EventID) -> CalendarEvent? {
+        snapshot?.events.first { $0.id == id }
+    }
+
     var visibleEvents: [CalendarEvent] {
         snapshot?.events(visibleWith: visibility) ?? []
     }
@@ -65,6 +76,9 @@ final class AppModel {
             let session = try await service.signIn(authorize: authorize)
             phase = .signedIn(SignedIn(account: session.account, snapshot: session.snapshot))
             WidgetCenter.shared.reloadAllTimelines()
+            if session.snapshot == nil {
+                await refresh()
+            }
         } catch .cancelled {
             phase = .signedOut(nil)
         } catch {
@@ -92,10 +106,17 @@ final class AppModel {
         update { $0.isRefreshing = false }
     }
 
+    func refreshIfStale(maxAge: TimeInterval = 5 * 60) async {
+        guard case .signedIn(let state) = phase else { return }
+        if let fetchedAt = state.snapshot?.fetchedAt, Date.now.timeIntervalSince(fetchedAt) < maxAge { return }
+        await refresh()
+    }
+
     func signOut() async {
         await service.signOut()
         preferences.reset()
         visibility = CalendarVisibility()
+        pendingLink = nil
         phase = .signedOut(nil)
         WidgetCenter.shared.reloadAllTimelines()
     }
@@ -104,6 +125,15 @@ final class AppModel {
         visibility.overrides[calendar] = visible
         preferences.visibility = visibility
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func open(_ link: DeepLink) {
+        pendingLink = link
+    }
+
+    func takePendingLink() -> DeepLink? {
+        defer { pendingLink = nil }
+        return pendingLink
     }
 
     private func update(_ change: (inout SignedIn) -> Void) {
