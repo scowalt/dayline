@@ -12,7 +12,6 @@ public struct Session: Hashable, Sendable {
 }
 
 public enum CalendarServiceError: Error, Hashable, Sendable {
-    case notConfigured
     case cancelled
     case sessionExpired
     case offline

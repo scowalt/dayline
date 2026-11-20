@@ -5,8 +5,6 @@ extension CalendarServiceError {
         switch self {
         case .cancelled:
             nil
-        case .notConfigured:
-            "Google sign-in isn't set up in this build of Dayline yet."
         case .sessionExpired:
             "Your Google session ended. Sign in again to see your calendar."
         case .offline:
@@ -20,8 +18,6 @@ extension CalendarServiceError {
         switch self {
         case .cancelled:
             nil
-        case .notConfigured:
-            "Sign-in isn't set up"
         case .sessionExpired:
             "Session ended"
         case .offline:
@@ -37,7 +33,7 @@ extension CalendarServiceError {
             "wifi.slash"
         case .sessionExpired:
             "person.crop.circle.badge.clock"
-        case .cancelled, .notConfigured, .failed:
+        case .cancelled, .failed:
             "exclamationmark.triangle"
         }
     }
