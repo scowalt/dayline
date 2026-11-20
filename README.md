@@ -59,6 +59,13 @@ xtool install Dayline.ipa
 
 With a free Apple ID, the install expires after 7 days. Run `xtool install` again to renew it.
 
+With a paid Apple Developer Program membership, log in with an App Store Connect API key (App Manager role) and the install lasts a year. The API can't assign app groups, so do that once in the developer portal before the first install:
+
+1. Register the App Group `group.com.scowalt.dayline`.
+2. Run `xtool install` once. It fails, but it registers the App IDs `XTL-<prefix>.com.scowalt.dayline` and `XTL-<prefix>.com.scowalt.dayline.widget`.
+3. Turn on App Groups for both App IDs and select `group.com.scowalt.dayline`.
+4. Run `xtool install` again.
+
 ## Google sign-in
 
 Dayline uses the OAuth 2.0 authorization code flow with PKCE for an iOS OAuth client, with no client secret. The client ID in `Sources/DaylineKit/GoogleClient+Dayline.swift` is public by design. A fork needs its own client: create an iOS OAuth client for its bundle ID in Google Cloud, enable the Google Calendar API, and replace the ID.
