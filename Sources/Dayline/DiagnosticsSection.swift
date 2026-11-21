@@ -12,7 +12,7 @@ struct DiagnosticsSection: View {
                 Label("Share Diagnostics", systemImage: "stethoscope")
             }
         } footer: {
-            Text("A text report of each account's calendars and the last \(SyncLog.limit) sync requests. It includes calendar names and email addresses, but no event details or sign-in tokens.")
+            Text("A text report of each account's calendars, the changes still waiting to be sent to Google, and the last \(SyncLog.limit) sync log entries. It includes calendar names, email addresses and event IDs, but no event titles, notes or sign-in tokens.")
         }
     }
 
@@ -23,7 +23,8 @@ struct DiagnosticsSection: View {
             timeZone: .current,
             accounts: model.accounts,
             issues: model.issues.mapValues { "\($0)" },
-            snapshot: model.snapshot,
+            snapshot: model.base,
+            outbox: model.outbox,
             visibility: model.visibility,
             log: SyncLog.shared?.entries() ?? []
         )

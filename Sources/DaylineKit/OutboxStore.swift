@@ -12,9 +12,20 @@ public struct OutboxStore: Sendable {
         AppGroup.containerURL.map { OutboxStore(directory: $0.appending(path: "Outbox", directoryHint: .isDirectory)) }
     }
 
-    public func load() -> Outbox {
-        guard let data = try? Data(contentsOf: url) else { return Outbox() }
-        return (try? JSONDecoder().decode(Outbox.self, from: data)) ?? Outbox()
+    public func load() throws -> Outbox {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return Outbox()
+        }
+        return try JSONDecoder().decode(Outbox.self, from: data)
+    }
+
+    public func moveAside(at date: Date = .now) throws -> URL {
+        let destination = directory.appending(path: "outbox-unreadable-\(date.formatted(.iso8601)).json")
+        try FileManager.default.moveItem(at: url, to: destination)
+        return destination
     }
 
     public func save(_ outbox: Outbox) throws {

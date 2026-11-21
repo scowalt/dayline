@@ -78,6 +78,7 @@ final class AppModel {
     private let preferences: CalendarPreferences
     private let outboxStore: OutboxStore?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
+    @ObservationIgnored private var sentCount = 0
 
     init(
         service: any CalendarService,
@@ -107,6 +108,8 @@ final class AppModel {
     }
 
     var snapshot: Snapshot? { signedIn?.snapshot }
+    var base: Snapshot? { signedIn?.base }
+    var outbox: Outbox { signedIn?.outbox ?? Outbox() }
     var accounts: [Account] { signedIn?.accounts ?? [] }
     var issues: [Account.ID: CalendarServiceError] { signedIn?.issues ?? [:] }
     var isAddingAccount: Bool { signedIn?.isAddingAccount ?? false }
@@ -134,12 +137,27 @@ final class AppModel {
     }
 
     private func storedOutbox(for session: Session) -> Outbox {
-        var outbox = outboxStore?.load() ?? Outbox()
+        var outbox = loadOutbox()
         let signedIn = Set(session.accounts.map(\.id))
         for account in Set(outbox.changes.map(\.account)).subtracting(signedIn) {
-            outbox.removeAll(for: account)
+            log(OutboxLog.removedOnSignOut(outbox.removeAll(for: account)), account: account)
         }
         return outbox
+    }
+
+    private func loadOutbox() -> Outbox {
+        guard let outboxStore else { return Outbox() }
+        do {
+            return try outboxStore.load()
+        } catch {
+            let movedTo = try? outboxStore.moveAside().lastPathComponent
+            log(OutboxLog.unreadable(error: error.localizedDescription, movedTo: movedTo))
+            return Outbox()
+        }
+    }
+
+    private func log(_ message: String, account: Account.ID? = nil) {
+        SyncLog.shared?.append(SyncLogEntry(at: .now, source: "app", account: account, message: message), as: .app)
     }
 
     private func watchNetwork() {
@@ -235,7 +253,11 @@ final class AppModel {
     }
 
     func signOut(_ account: Account.ID) async {
-        updateOutbox { $0.outbox.removeAll(for: account) }
+        var removed: [PendingChange] = []
+        updateOutbox { removed = $0.outbox.removeAll(for: account) }
+        if !removed.isEmpty {
+            log(OutboxLog.removedOnSignOut(removed), account: account)
+        }
         if let session = await service.signOut(account) {
             update { state in
                 let issues = state.issues.filter { id, _ in session.accounts.contains { $0.id == id } }
@@ -263,10 +285,12 @@ final class AppModel {
     private func enqueue(_ event: CalendarEvent, change: Change, notifyGuests: Bool) async {
         guard let account = snapshot?.account(owning: event.calendarID) else { return }
         let pending = PendingChange(account: account.id, change: change, notifyGuests: notifyGuests, eventTitle: event.title)
+        var replaced: [PendingChange] = []
         updateOutbox {
-            $0.outbox.enqueue(pending)
+            replaced = $0.outbox.enqueue(pending)
             $0.changeIssue = nil
         }
+        log(OutboxLog.queued(pending, replacing: replaced), account: pending.account)
         await drain()
     }
 
@@ -276,16 +300,21 @@ final class AppModel {
         var blocked: Set<Account.ID> = []
         while let pending = signedIn?.outbox.next(excluding: blocked) {
             let outcome: SendOutcome<CalendarServiceError>
+            var failure: String?
             do throws(CalendarServiceError) {
                 try await service.send(pending)
                 outcome = .sent
             } catch {
+                failure = "\(error)"
                 outcome = error.outcome
             }
             guard let current = signedIn else { return }
-            guard current.outbox.changes.contains(where: { $0.id == pending.id }) else { continue }
+            let stillQueued = current.outbox.changes.contains { $0.id == pending.id }
+            log(OutboxLog.result(of: pending, outcome: outcome, error: failure, stillQueued: stillQueued, now: .now), account: pending.account)
+            guard stillQueued else { continue }
             switch outcome {
             case .sent:
+                sentCount += 1
                 updateOutbox {
                     $0.base = $0.base?.applying(pending.change)
                     $0.outbox.remove(pending.id)
@@ -309,8 +338,11 @@ final class AppModel {
     }
 
     func drainInBackground() async {
+        log(OutboxLog.backgroundStarted)
+        let sentBefore = sentCount
         await start()
         await drain()
+        log(OutboxLog.backgroundFinished(sent: sentCount - sentBefore, queued: outbox.changes.count))
         scheduleBackgroundDrain()
     }
 
@@ -363,8 +395,12 @@ final class AppModel {
 
     private func updateOutbox(_ change: (inout SignedIn) -> Void) {
         update(change)
-        if let outbox = signedIn?.outbox {
-            try? outboxStore?.save(outbox)
+        if let outbox = signedIn?.outbox, let outboxStore {
+            do {
+                try outboxStore.save(outbox)
+            } catch {
+                log(OutboxLog.saveFailed(count: outbox.changes.count, error: error.localizedDescription))
+            }
         }
         WidgetCenter.shared.reloadAllTimelines()
     }

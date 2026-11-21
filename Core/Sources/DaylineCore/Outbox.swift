@@ -32,21 +32,29 @@ public struct Outbox: Hashable, Codable, Sendable {
 
     public var isEmpty: Bool { changes.isEmpty }
 
-    public mutating func enqueue(_ pending: PendingChange) {
+    @discardableResult
+    public mutating func enqueue(_ pending: PendingChange) -> [PendingChange] {
+        var replaced: [PendingChange] = []
         if case .move(let event, _) = pending.change {
-            changes.removeAll { existing in
+            let isEarlierMove = { (existing: PendingChange) in
                 if case .move(event, _) = existing.change { true } else { false }
             }
+            replaced = changes.filter(isEarlierMove)
+            changes.removeAll(where: isEarlierMove)
         }
         changes.append(pending)
+        return replaced
     }
 
     public mutating func remove(_ id: PendingChange.ID) {
         changes.removeAll { $0.id == id }
     }
 
-    public mutating func removeAll(for account: Account.ID) {
+    @discardableResult
+    public mutating func removeAll(for account: Account.ID) -> [PendingChange] {
+        let removed = changes.filter { $0.account == account }
         changes.removeAll { $0.account == account }
+        return removed
     }
 
     public func next(excluding blocked: Set<Account.ID>) -> PendingChange? {
