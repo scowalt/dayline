@@ -7,6 +7,7 @@ public actor LiveCalendarService: CalendarService {
     private let client = GoogleClient.dayline
     private let transport = HTTPTransport()
     private let vault = KeychainVault()
+    private let log = SyncLog.shared
     private var accessTokens: [Account.ID: AccessToken] = [:]
 
     public init(writer: SnapshotStore.Writer) {
@@ -36,10 +37,15 @@ public actor LiveCalendarService: CalendarService {
             try GoogleOAuth.authorizationCode(from: callback, expectedState: state)
         }
         let sentAt = Date.now
-        let response = try await transport.send(GoogleOAuth.codeExchangeRequest(client: client, code: code, pkce: pkce))
-        let grant = try google { () throws(GoogleError) in
-            try GoogleOAuth.signInGrant(from: response, receivedAt: sentAt)
+        let response = try await send(GoogleOAuth.codeExchangeRequest(client: client, code: code, pkce: pkce), account: loginHint)
+        let grant: SignInGrant
+        do throws(GoogleError) {
+            grant = try GoogleOAuth.signInGrant(from: response, receivedAt: sentAt)
+        } catch {
+            record("Sign-in failed: \(error)", account: loginHint)
+            throw CalendarServiceError(error)
         }
+        record("Signed in", account: grant.credential.account.id)
         if writer == .app {
             let existing = vault.read()
             if existing.isEmpty {
@@ -57,6 +63,7 @@ public actor LiveCalendarService: CalendarService {
         let now = Date.now
         let window = GoogleCalendarAPI.window(containing: now, in: .current)
         let visibility = CalendarPreferences().visibility
+        record("Refresh started for \(credentials.count) accounts")
         let outcomes = await fetchAll(credentials, window: window, visibility: visibility)
         let carried = SnapshotStore.shared?.latest()
 
@@ -67,9 +74,11 @@ public actor LiveCalendarService: CalendarService {
             let id = credential.account.id
             switch outcome {
             case .success(let account):
+                record("Fetched \(account.calendars.count) calendars, \(account.calendars.filter(visibility.isVisible).count) visible, \(account.events.count) events", account: id)
                 fetched.append(account)
                 kept.append(account)
             case .failure(let error):
+                record("Refresh failed: \(error)", account: id)
                 issues[id] = error
                 if let earlier = carried?.accounts.first(where: { $0.account.id == id }) {
                     kept.append(earlier)
@@ -78,6 +87,7 @@ public actor LiveCalendarService: CalendarService {
         }
 
         if writer == .app, issues.count == credentials.count, issues.values.allSatisfy({ $0 == .sessionExpired }) {
+            record("Google ended every account's session, so Dayline signed out")
             try? vault.save([])
             SnapshotStore.shared?.clear()
             accessTokens = [:]
@@ -246,10 +256,10 @@ public actor LiveCalendarService: CalendarService {
 
     private func authorizedResponse(to request: HTTPRequest, credential: GoogleCredential) async throws(CalendarServiceError) -> HTTPResponse {
         let token = try await validAccessToken(credential: credential)
-        let response = try await transport.send(request.authorized(with: token))
+        let response = try await send(request.authorized(with: token), account: credential.account.id)
         guard response.status == 401 else { return response }
         let renewed = try await validAccessToken(rejecting: token, credential: credential)
-        return try await transport.send(request.authorized(with: renewed))
+        return try await send(request.authorized(with: renewed), account: credential.account.id)
     }
 
     private func validAccessToken(rejecting rejected: AccessToken? = nil, credential: GoogleCredential) async throws(CalendarServiceError) -> AccessToken {
@@ -258,7 +268,7 @@ public actor LiveCalendarService: CalendarService {
             return cached
         }
         let sentAt = Date.now
-        let response = try await transport.send(GoogleOAuth.refreshRequest(client: client, refreshToken: credential.refreshToken))
+        let response = try await send(GoogleOAuth.refreshRequest(client: client, refreshToken: credential.refreshToken), account: id)
         do throws(GoogleError) {
             let token = try GoogleOAuth.accessToken(from: response, receivedAt: sentAt)
             accessTokens[id] = token
@@ -269,6 +279,22 @@ public actor LiveCalendarService: CalendarService {
             }
             throw CalendarServiceError(error)
         }
+    }
+
+    private func send(_ request: HTTPRequest, account: Account.ID?) async throws(CalendarServiceError) -> HTTPResponse {
+        let start = ContinuousClock.now
+        do {
+            let response = try await transport.send(request)
+            record(Diagnostics.line(for: request, response: response, elapsed: start.duration(to: .now)), account: account)
+            return response
+        } catch {
+            record(Diagnostics.line(for: request, failure: "\(error)", elapsed: start.duration(to: .now)), account: account)
+            throw error
+        }
+    }
+
+    private func record(_ message: String, account: Account.ID? = nil) {
+        log?.append(SyncLogEntry(at: .now, source: writer.rawValue, account: account, message: message), as: writer)
     }
 
     private func google<Value>(_ body: () throws(GoogleError) -> Value) throws(CalendarServiceError) -> Value {

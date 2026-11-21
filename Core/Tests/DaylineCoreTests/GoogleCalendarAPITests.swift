@@ -5,10 +5,10 @@ import Testing
 struct GoogleCalendarAPITests {
     let primary = CalendarID(rawValue: "alex.rivera@example.com")
     var owned: CalendarInfo {
-        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, canEditEvents: true)
+        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, access: .owner)
     }
     var subscribed: CalendarInfo {
-        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, canEditEvents: false)
+        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, access: .reader)
     }
     let newYork: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
@@ -55,7 +55,7 @@ struct GoogleCalendarAPITests {
         #expect(components.percentEncodedQuery?.contains("+") == false)
     }
 
-    @Test func calendarListDecodesTitlesSelectionAndGoogleUIColors() throws {
+    @Test func calendarListDecodesTitlesSelectionAccessAndGoogleUIColors() throws {
         let first = try GoogleCalendarAPI.calendarListPage(from: GoogleFixtures.response(GoogleFixtures.calendarListFirstPage))
         #expect(first.nextPageToken == "calendars-p2")
         #expect(first.items == [
@@ -68,6 +68,7 @@ struct GoogleCalendarAPITests {
         #expect(last.nextPageToken == nil)
         #expect(last.items == [
             CalendarInfo(id: CalendarID(rawValue: "addressbook#contacts@group.v.calendar.google.com"), title: "Birthdays", color: RGBColor(hex: "#33B679")!, isPrimary: false, isSelectedInGoogle: false),
+            CalendarInfo(id: CalendarID(rawValue: "pat.lee@example.com"), title: "Pat Lee", color: RGBColor(hex: "#E67C73")!, isPrimary: false, isSelectedInGoogle: false, access: .freeBusyReader),
         ])
     }
 

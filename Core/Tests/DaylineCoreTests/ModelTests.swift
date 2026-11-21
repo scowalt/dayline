@@ -87,8 +87,8 @@ struct MultiAccountSnapshotTests {
     let second = Account(email: "second@example.com")
     let third = Account(email: "third@example.com")
 
-    func calendar(_ id: String, title: String? = nil) -> CalendarInfo {
-        CalendarInfo(id: CalendarID(rawValue: id), title: title ?? id, color: RGBColor(red: 0, green: 0, blue: 0), isPrimary: false, isSelectedInGoogle: true)
+    func calendar(_ id: String, title: String? = nil, access: CalendarAccess = .reader, selected: Bool = true) -> CalendarInfo {
+        CalendarInfo(id: CalendarID(rawValue: id), title: title ?? id, color: RGBColor(red: 0, green: 0, blue: 0), isPrimary: false, isSelectedInGoogle: selected, access: access)
     }
 
     func event(_ calendar: CalendarInfo, _ id: String, title: String) -> CalendarEvent {
@@ -118,12 +118,33 @@ struct MultiAccountSnapshotTests {
         ])
     }
 
-    @Test func aSharedCalendarAndItsEventsComeFromTheFirstAccount() {
+    @Test func aCalendarSharedWithEqualAccessComesFromTheFirstAccount() {
         let merged = sharedSnapshot
 
         #expect(merged.calendars.map(\.id.rawValue) == ["own", "shared", "other"])
         #expect(merged.calendar(CalendarID(rawValue: "shared"))?.title == "from first")
         #expect(merged.events.map(\.title) == ["own", "shared by first", "other"])
+    }
+
+    @Test func aSharedCalendarComesFromTheAccountWithTheMostAccessToIt() {
+        let personal = "me@gmail.com"
+        let merged = snapshot([
+            AccountSnapshot(
+                account: first,
+                calendars: [calendar("work", access: .owner), calendar(personal, access: .freeBusyReader, selected: false)],
+                events: [event(calendar("work"), "1", title: "standup")]
+            ),
+            AccountSnapshot(
+                account: Account(email: personal),
+                calendars: [calendar(personal, access: .owner)],
+                events: [event(calendar(personal), "2", title: "dentist")]
+            ),
+        ])
+
+        #expect(merged.calendars(of: first.id).map(\.id.rawValue) == ["work"])
+        #expect(merged.calendars(of: personal).map(\.id.rawValue) == [personal])
+        #expect(merged.account(owning: CalendarID(rawValue: personal))?.email == personal)
+        #expect(merged.events(visibleWith: CalendarVisibility()).map(\.title) == ["standup", "dentist"])
     }
 
     @Test func anAccountDoesNotListACalendarAnotherAccountOwns() {

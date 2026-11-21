@@ -46,7 +46,7 @@ public enum GoogleCalendarAPI {
                 color: GoogleColors.calendar(colorID: entry.colorId, background: entry.backgroundColor),
                 isPrimary: entry.primary == true,
                 isSelectedInGoogle: entry.selected == true,
-                canEditEvents: entry.accessRole == "owner" || entry.accessRole == "writer"
+                access: entry.accessRole.flatMap(CalendarAccess.init(rawValue:)) ?? .freeBusyReader
             )
         }
         return Page(items: calendars, nextPageToken: body.nextPageToken)
