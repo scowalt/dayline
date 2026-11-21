@@ -8,6 +8,7 @@ public enum GoogleError: Error, Hashable, Sendable {
     case missingRefreshToken
     case missingCalendarScope
     case unauthorized
+    case insufficientScope
     case server(status: Int, message: String?)
     case malformedResponse
 
@@ -27,6 +28,8 @@ public enum GoogleError: Error, Hashable, Sendable {
             "Dayline needs permission to see your calendars. Sign in again and allow calendar access."
         case .unauthorized:
             "Google rejected Dayline's credentials. Sign in again."
+        case .insufficientScope:
+            "Dayline needs permission to change events in this Google account."
         case .server(let status, let message?):
             "Google error \(status): \(message)"
         case .server(let status, nil):
@@ -46,10 +49,12 @@ public enum GoogleError: Error, Hashable, Sendable {
     }
 
     init(apiResponse response: HTTPResponse) {
+        let body = try? GoogleJSON.decode(APIErrorBody.self, from: response.body)
         if response.status == 401 {
             self = .unauthorized
+        } else if response.status == 403, body?.error.errors?.contains(where: { $0.reason == "insufficientPermissions" }) == true {
+            self = .insufficientScope
         } else {
-            let body = try? GoogleJSON.decode(APIErrorBody.self, from: response.body)
             self = .server(status: response.status, message: body?.error.message)
         }
     }
@@ -75,6 +80,11 @@ private struct OAuthErrorBody: Decodable {
 private struct APIErrorBody: Decodable {
     struct Detail: Decodable {
         var message: String?
+        var errors: [Reason]?
+    }
+
+    struct Reason: Decodable {
+        var reason: String?
     }
 
     var error: Detail

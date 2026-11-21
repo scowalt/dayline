@@ -51,7 +51,8 @@ public struct SignInGrant: Hashable, Sendable {
 
 public enum GoogleOAuth {
     public static let calendarScope = "https://www.googleapis.com/auth/calendar.readonly"
-    public static let scopes = ["openid", "email", "profile", calendarScope]
+    public static let eventsScope = "https://www.googleapis.com/auth/calendar.events"
+    public static let scopes = ["openid", "email", "profile", calendarScope, eventsScope]
 
     static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
@@ -67,6 +68,7 @@ public enum GoogleOAuth {
             ("code_challenge_method", "S256"),
             ("state", state),
             ("prompt", "select_account"),
+            ("include_granted_scopes", "true"),
         ]
         if let loginHint {
             query.append(("login_hint", loginHint))

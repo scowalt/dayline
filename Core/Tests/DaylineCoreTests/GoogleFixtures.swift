@@ -73,6 +73,31 @@ enum GoogleFixtures {
         }
         """
 
+    static let insufficientScope = """
+        {
+          "error": {
+            "code": 403,
+            "message": "Request had insufficient authentication scopes.",
+            "errors": [
+              {
+                "message": "Insufficient Permission",
+                "domain": "global",
+                "reason": "insufficientPermissions"
+              }
+            ],
+            "status": "PERMISSION_DENIED",
+            "details": [
+              {
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                "domain": "googleapis.com",
+                "metadata": { "service": "calendar-json.googleapis.com", "method": "calendar.v3.Events.Patch" }
+              }
+            ]
+          }
+        }
+        """
+
     static let rateLimited = """
         {
           "error": {
@@ -216,6 +241,7 @@ enum GoogleFixtures {
               "kind": "calendar#event",
               "id": "zoomsync01",
               "status": "confirmed",
+              "guestsCanModify": true,
               "htmlLink": "https://www.google.com/calendar/event?eid=em9vbXN5bmMwMQ",
               "summary": "Vendor call",
               "description": "Join Zoom Meeting\nhttps://us02web.zoom.us/j/81234567890?pwd=abc\n\nMeeting ID: 812 3456 7890\n\n\n\nOne tap mobile <tel:+16465588656,,81234567890#>",
@@ -252,6 +278,8 @@ enum GoogleFixtures {
               "kind": "calendar#event",
               "id": "busyblock",
               "status": "confirmed",
+              "organizer": { "email": "alex.rivera@example.com", "self": true },
+              "locked": true,
               "visibility": "private",
               "start": { "dateTime": "2026-11-21T09:00:00-05:00" },
               "end": { "dateTime": "2026-11-21T09:30:00-05:00" },
@@ -272,6 +300,7 @@ enum GoogleFixtures {
               "summary": "   ",
               "description": "   \n  ",
               "location": "",
+              "organizer": { "email": "alex.rivera@example.com", "self": true },
               "start": { "dateTime": "2026-11-22T10:00:00-05:00" },
               "end": { "dateTime": "2026-11-22T10:00:00-05:00" }
             }

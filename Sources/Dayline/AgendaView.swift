@@ -1,3 +1,4 @@
+import AuthenticationServices
 import DaylineCore
 import DaylineKit
 import SwiftUI
@@ -6,6 +7,9 @@ struct AgendaView: View {
     let model: AppModel
     let state: AppModel.SignedIn
     @Environment(\.calendar) private var calendar
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    @AppStorage("calendarLayout") private var layout = CalendarLayout.list
+    @State private var firstDay = CivilDate(.now, in: .current)
     @State private var path: [EventID] = []
     @State private var scrollTarget: CivilDate?
     @State private var isShowingSettings = false
@@ -16,8 +20,25 @@ struct AgendaView: View {
                 content(now: context.date)
                     .navigationSubtitle(status(now: context.date))
             }
-            .navigationTitle("Agenda")
+            .navigationTitle(layout == .list ? "Agenda" : "Calendar")
+            .navigationBarTitleDisplayMode(layout == .list ? .automatic : .inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu("Layout", systemImage: layout.symbolName) {
+                        Picker("Layout", selection: $layout) {
+                            ForEach(CalendarLayout.allCases) { option in
+                                Label(option.title, systemImage: option.symbolName)
+                            }
+                        }
+                    }
+                }
+                if layout != .list {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Today") {
+                            firstDay = CivilDate(.now, in: calendar)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Settings", systemImage: "gearshape") {
                         isShowingSettings = true
@@ -31,6 +52,24 @@ struct AgendaView: View {
         .sheet(isPresented: $isShowingSettings) {
             SettingsView(model: model)
         }
+        .alert(
+            "Couldn't Move \(state.rescheduleIssue?.eventTitle ?? "Event")",
+            isPresented: Binding(get: { state.rescheduleIssue != nil }, set: { if !$0 { model.dismissRescheduleIssue() } }),
+            presenting: state.rescheduleIssue
+        ) { issue in
+            if issue.error == .missingEditPermission || issue.error == .sessionExpired {
+                Button("Allow Changes") {
+                    Task { await model.signIn(authorize: webAuthenticationSession.authorize, loginHint: issue.account.email) }
+                }
+                Button("Not Now", role: .cancel) {}
+            } else {
+                Button("OK", role: .cancel) {}
+            }
+        } message: { issue in
+            Text(issue.error == .missingEditPermission
+                ? "Sign in to \(issue.account.email) again and allow Dayline to change your events. The event is back where it was."
+                : "\(issue.error.signInMessage ?? "Google didn't accept the change.") The event is back where it was.")
+        }
         .task(id: model.pendingLink) {
             guard let link = model.takePendingLink() else { return }
             isShowingSettings = false
@@ -38,9 +77,11 @@ struct AgendaView: View {
             case .today:
                 path = []
                 scrollTarget = CivilDate(.now, in: calendar)
+                firstDay = CivilDate(.now, in: calendar)
             case .day(let date):
                 path = []
                 scrollTarget = date
+                firstDay = date
             case .event(let id):
                 path = [id]
             }
@@ -49,7 +90,9 @@ struct AgendaView: View {
 
     @ViewBuilder
     private func content(now: Date) -> some View {
-        if let snapshot = state.snapshot {
+        if let snapshot = state.snapshot, layout != .list {
+            ScheduleView(model: model, snapshot: snapshot, now: now, dayCount: layout == .day ? 1 : 3, firstDay: $firstDay) { path.append($0) }
+        } else if let snapshot = state.snapshot {
             let days = agendaDays(in: snapshot, now: now)
             ScrollViewReader { proxy in
                 List {

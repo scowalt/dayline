@@ -17,11 +17,12 @@ The screenshots use the built-in demo data.
 - Signs in with one or more Google accounts (Workspace or personal) and reads the next 14 days of events from the calendars you show. The agenda and widgets merge every account. A calendar shared with two of your accounts appears once, under the account you signed in to first.
 - Settings lists each account with its calendars. You can add an account or sign out of one. If Google ends one account's session, its last events stay on screen and Settings offers Sign In Again. The other accounts keep working.
 - Agenda grouped by day, with all-day and multi-day events, a now marker, Meet join buttons and your response to each invitation.
+- Day and 3 Days views on an hourly grid, picked from the layout menu. Touch and hold an event, then drag it to another time or day to move it. Drops snap to 15 minutes. If the event has other guests, Dayline asks whether to send them an update. If Google refuses the change, the event goes back to where it was.
 - Per-calendar show and hide, shared with the widgets.
 - Hide events by title, such as the "Personal event" blocks a calendar sync app copies in. Add a title in Settings or from an event's detail screen. Matching is exact but ignores capitalization, and the widgets hide the same events.
 - An Up Next widget in small, medium and large home-screen sizes and inline, rectangular and circular lock-screen sizes. Tapping an event opens it in the app.
 
-Dayline only reads your calendar (`calendar.readonly`). Calendar data stays on the phone. Each account's Google refresh token is stored in the Keychain. There is no server.
+Dayline reads your calendars and can move an event you drag in the Day or 3 Days view (`calendar.readonly` plus `calendar.events`). It changes only the start and end of an event you organize, or one whose organizer lets guests modify it, on a calendar you can edit. Calendar data stays on the phone. Each account's Google refresh token is stored in the Keychain. There is no server.
 
 ## Layout
 
@@ -88,3 +89,5 @@ With a paid Apple Developer Program membership, log in with an App Store Connect
 ## Google sign-in
 
 Dayline uses the OAuth 2.0 authorization code flow with PKCE for an iOS OAuth client, with no client secret. The client ID in `Sources/DaylineKit/GoogleClient+Dayline.swift` is public by design. A fork needs its own client: create an iOS OAuth client for its bundle ID in Google Cloud, enable the Google Calendar API, and replace the ID.
+
+Accounts that signed in before Dayline could move events have only the read-only scope. The first time you move an event in one of them, Dayline asks you to sign in to that account again and allow changes.

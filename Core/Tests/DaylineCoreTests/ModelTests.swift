@@ -143,6 +143,22 @@ struct MultiAccountSnapshotTests {
         #expect(remaining.fetchedAt == sharedSnapshot.fetchedAt)
     }
 
+    @Test func aRescheduledEventMovesInEveryAccountThatListsIt() {
+        let shared = EventID(calendar: CalendarID(rawValue: "shared"), event: "2")
+        let later = EventTime.timed(start: now.addingTimeInterval(3600), end: now.addingTimeInterval(7200))
+        let moved = sharedSnapshot.rescheduling(shared, to: later)
+
+        #expect(moved.accounts.flatMap(\.events).filter { $0.id == shared }.map(\.time) == [later, later])
+        #expect(moved.accounts.flatMap(\.events).filter { $0.id != shared } == sharedSnapshot.accounts.flatMap(\.events).filter { $0.id != shared })
+    }
+
+    @Test func anEventIsChangedThroughTheAccountThatOwnsItsCalendar() {
+        #expect(sharedSnapshot.account(owning: CalendarID(rawValue: "shared")) == first)
+        #expect(sharedSnapshot.account(owning: CalendarID(rawValue: "other")) == second)
+        #expect(sharedSnapshot.removing(first.id).account(owning: CalendarID(rawValue: "shared")) == second)
+        #expect(sharedSnapshot.account(owning: CalendarID(rawValue: "missing")) == nil)
+    }
+
     @Test func visibilityAppliesAcrossAccounts() {
         let hidden = CalendarVisibility(overrides: [CalendarID(rawValue: "shared"): false])
 

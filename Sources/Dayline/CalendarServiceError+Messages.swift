@@ -9,6 +9,8 @@ extension CalendarServiceError {
             "Your Google session ended. Sign in again to see your calendar."
         case .offline:
             "You're offline. Connect to the internet and try again."
+        case .missingEditPermission:
+            "Dayline needs permission to change events in this account."
         case .failed(let message):
             message
         }
@@ -22,7 +24,7 @@ extension CalendarServiceError {
             "Session ended"
         case .offline:
             "Offline"
-        case .failed:
+        case .missingEditPermission, .failed:
             "Couldn't update"
         }
     }
@@ -33,6 +35,8 @@ extension CalendarServiceError {
             "wifi.slash"
         case .sessionExpired:
             "person.crop.circle.badge.clock"
+        case .missingEditPermission:
+            "lock"
         case .cancelled, .failed:
             "exclamationmark.triangle"
         }

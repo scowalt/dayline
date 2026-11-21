@@ -127,6 +127,16 @@ public actor LiveCalendarService: CalendarService {
         return Session(accounts: remaining.map(\.account), snapshot: SnapshotStore.shared?.latest())
     }
 
+    public func reschedule(_ event: EventID, of account: Account.ID, to time: EventTime, notifyGuests: Bool) async throws(CalendarServiceError) {
+        guard let credential = vault.read().first(where: { $0.account.id == account }) else { throw .sessionExpired }
+        let request = GoogleCalendarAPI.rescheduleRequest(event, to: time, notifyGuests: notifyGuests)
+        let response = try await authorizedResponse(to: request, credential: credential)
+        try google { () throws(GoogleError) in try GoogleCalendarAPI.rescheduleResult(from: response) }
+        if let stored = SnapshotStore.shared?.latest() {
+            try? SnapshotStore.shared?.save(stored.rescheduling(event, to: time), as: writer)
+        }
+    }
+
     public func refreshIfStale(maxAge: Duration) async -> Snapshot? {
         guard !vault.read().isEmpty else { return nil }
         let stored = SnapshotStore.shared?.latest()
@@ -165,18 +175,18 @@ public actor LiveCalendarService: CalendarService {
         visibility: CalendarVisibility
     ) async throws(CalendarServiceError) -> AccountSnapshot {
         let calendars = try await allPages(credential: credential, request: GoogleCalendarAPI.calendarListRequest, decode: GoogleCalendarAPI.calendarListPage)
-        let events = try await events(in: calendars.filter(visibility.isVisible).map(\.id), window: window, credential: credential)
+        let events = try await events(in: calendars.filter(visibility.isVisible), window: window, credential: credential)
         return AccountSnapshot(account: credential.account, calendars: calendars, events: events)
     }
 
-    private func events(in calendars: [CalendarID], window: DateInterval, credential: GoogleCredential) async throws(CalendarServiceError) -> [CalendarEvent] {
+    private func events(in calendars: [CalendarInfo], window: DateInterval, credential: GoogleCredential) async throws(CalendarServiceError) -> [CalendarEvent] {
         let outcome = await withTaskGroup(of: Result<[CalendarEvent], CalendarServiceError>.self) { group in
             for calendar in calendars {
                 group.addTask {
                     do throws(CalendarServiceError) {
                         return .success(try await self.allPages(
                             credential: credential,
-                            request: { GoogleCalendarAPI.eventsRequest(calendar: calendar, window: window, pageToken: $0) },
+                            request: { GoogleCalendarAPI.eventsRequest(calendar: calendar.id, window: window, pageToken: $0) },
                             decode: { response throws(GoogleError) in try GoogleCalendarAPI.eventsPage(from: response, calendar: calendar) }
                         ))
                     } catch {
@@ -258,6 +268,8 @@ extension CalendarServiceError {
             self = .cancelled
         case .invalidGrant:
             self = .sessionExpired
+        case .insufficientScope:
+            self = .missingEditPermission
         case .stateMismatch, .authorizationFailed, .missingRefreshToken, .missingCalendarScope, .unauthorized, .server, .malformedResponse:
             self = .failed(error.message)
         }
