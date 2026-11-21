@@ -244,7 +244,7 @@ struct GoogleCalendarAPITests {
         #expect(events["trashnight_20261120"]?.color == RGBColor(hex: "#F6BF26"))
         #expect(events["portlandtrip"]?.time == .allDay(first: CivilDate(year: 2026, month: 11, day: 30), last: CivilDate(year: 2026, month: 12, day: 2)))
         #expect(events["redeye"]?.time == .timed(start: utc(2026, 12, 3, 6, 15), end: utc(2026, 12, 3, 11, 40)))
-        #expect(events["ooo"]?.time == .timed(start: utc(2026, 11, 27, 5, 0), end: utc(2026, 11, 28, 5, 0)))
+        #expect(events["ooo"]?.time == .allDay(first: CivilDate(year: 2026, month: 11, day: 27), last: CivilDate(year: 2026, month: 11, day: 27)))
     }
 
     @Test func apiErrorsDistinguishExpiredAccessFromOtherFailures() {
