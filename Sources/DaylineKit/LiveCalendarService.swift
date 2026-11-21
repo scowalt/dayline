@@ -137,6 +137,25 @@ public actor LiveCalendarService: CalendarService {
         }
     }
 
+    public func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError) {
+        guard let credential = vault.read().first(where: { $0.account.id == account }) else { throw .sessionExpired }
+        let request: HTTPRequest
+        switch deletion {
+        case .event(let event), .series(let event):
+            request = GoogleCalendarAPI.deleteRequest(event, notifyGuests: notifyGuests)
+        case .following(let series, let start):
+            let master = try await authorizedResponse(to: GoogleCalendarAPI.eventRequest(series), credential: credential)
+            request = try google { () throws(GoogleError) in
+                try GoogleCalendarAPI.followingDeletionRequest(series: series, from: start, master: master, notifyGuests: notifyGuests)
+            }
+        }
+        let response = try await authorizedResponse(to: request, credential: credential)
+        try google { () throws(GoogleError) in try GoogleCalendarAPI.deletionResult(from: response) }
+        if let stored = SnapshotStore.shared?.latest() {
+            try? SnapshotStore.shared?.save(stored.deleting(deletion), as: writer)
+        }
+    }
+
     public func refreshIfStale(maxAge: Duration) async -> Snapshot? {
         guard !vault.read().isEmpty else { return nil }
         let stored = SnapshotStore.shared?.latest()

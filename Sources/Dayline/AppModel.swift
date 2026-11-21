@@ -21,7 +21,7 @@ final class AppModel {
         var isRefreshQueued = false
         var isAddingAccount = false
         var addAccountIssue: CalendarServiceError?
-        var rescheduleIssue: RescheduleIssue?
+        var changeIssue: ChangeIssue?
 
         init(_ session: Session) {
             accounts = session.accounts
@@ -48,8 +48,14 @@ final class AppModel {
         }
     }
 
-    struct RescheduleIssue: Equatable, Identifiable {
+    struct ChangeIssue: Equatable, Identifiable {
+        enum Change {
+            case move
+            case delete
+        }
+
         let id = UUID()
+        let change: Change
         let account: Account
         let eventTitle: String
         let error: CalendarServiceError
@@ -88,7 +94,7 @@ final class AppModel {
     var issues: [Account.ID: CalendarServiceError] { signedIn?.issues ?? [:] }
     var isAddingAccount: Bool { signedIn?.isAddingAccount ?? false }
     var addAccountIssue: CalendarServiceError? { signedIn?.addAccountIssue }
-    var rescheduleIssue: RescheduleIssue? { signedIn?.rescheduleIssue }
+    var changeIssue: ChangeIssue? { signedIn?.changeIssue }
 
     func event(_ id: EventID) -> CalendarEvent? {
         snapshot?.events.first { $0.id == id }
@@ -203,7 +209,7 @@ final class AppModel {
         guard let account = snapshot?.account(owning: event.calendarID) else { return }
         update {
             $0.snapshot = $0.snapshot?.rescheduling(event.id, to: time)
-            $0.rescheduleIssue = nil
+            $0.changeIssue = nil
         }
         do throws(CalendarServiceError) {
             try await service.reschedule(event.id, of: account.id, to: time, notifyGuests: notifyGuests)
@@ -217,13 +223,39 @@ final class AppModel {
                 if $0.snapshot?.events.first(where: { $0.id == event.id })?.time == time {
                     $0.snapshot = $0.snapshot?.rescheduling(event.id, to: event.time)
                 }
-                $0.rescheduleIssue = error == .cancelled ? nil : RescheduleIssue(account: account, eventTitle: event.title, error: error)
+                $0.changeIssue = error == .cancelled ? nil : ChangeIssue(change: .move, account: account, eventTitle: event.title, error: error)
             }
         }
     }
 
-    func dismissRescheduleIssue() {
-        update { $0.rescheduleIssue = nil }
+    func delete(_ event: CalendarEvent, scope: DeletionScope, notifyGuests: Bool) async {
+        guard let account = snapshot?.account(owning: event.calendarID) else { return }
+        let deletion = event.deletion(scope)
+        let before = snapshot
+        update {
+            $0.snapshot = $0.snapshot?.deleting(deletion)
+            $0.changeIssue = nil
+        }
+        let optimistic = snapshot
+        do throws(CalendarServiceError) {
+            try await service.delete(deletion, of: account.id, notifyGuests: notifyGuests)
+            update {
+                $0.snapshot = $0.snapshot?.deleting(deletion)
+                $0.isRefreshQueued = $0.isRefreshing
+            }
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch {
+            update {
+                if $0.snapshot == optimistic {
+                    $0.snapshot = before
+                }
+                $0.changeIssue = error == .cancelled ? nil : ChangeIssue(change: .delete, account: account, eventTitle: event.title, error: error)
+            }
+        }
+    }
+
+    func dismissChangeIssue() {
+        update { $0.changeIssue = nil }
     }
 
     func setVisible(_ visible: Bool, calendar: CalendarID) {

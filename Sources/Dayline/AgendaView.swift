@@ -53,9 +53,9 @@ struct AgendaView: View {
             SettingsView(model: model)
         }
         .alert(
-            "Couldn't Move \(state.rescheduleIssue?.eventTitle ?? "Event")",
-            isPresented: Binding(get: { state.rescheduleIssue != nil }, set: { if !$0 { model.dismissRescheduleIssue() } }),
-            presenting: state.rescheduleIssue
+            state.changeIssue.map(\.title) ?? "",
+            isPresented: Binding(get: { state.changeIssue != nil }, set: { if !$0 { model.dismissChangeIssue() } }),
+            presenting: state.changeIssue
         ) { issue in
             if issue.error == .missingEditPermission || issue.error == .sessionExpired {
                 Button("Allow Changes") {
@@ -66,9 +66,7 @@ struct AgendaView: View {
                 Button("OK", role: .cancel) {}
             }
         } message: { issue in
-            Text(issue.error == .missingEditPermission
-                ? "Sign in to \(issue.account.email) again and allow Dayline to change your events. The event is back where it was."
-                : "\(issue.error.signInMessage ?? "Google didn't accept the change.") The event is back where it was.")
+            Text(issue.message)
         }
         .task(id: model.pendingLink) {
             guard let link = model.takePendingLink() else { return }
@@ -255,5 +253,25 @@ private struct DayHeader: View {
 
     private var title: String {
         relativeName ?? date.start(in: calendar).formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
+}
+
+extension AppModel.ChangeIssue {
+    fileprivate var title: String {
+        switch change {
+        case .move: "Couldn't Move \(eventTitle)"
+        case .delete: "Couldn't Delete \(eventTitle)"
+        }
+    }
+
+    fileprivate var message: String {
+        let outcome = switch change {
+        case .move: "The event is back where it was."
+        case .delete: "The event is back on your calendar."
+        }
+        if error == .missingEditPermission {
+            return "Sign in to \(account.email) again and allow Dayline to change your events. \(outcome)"
+        }
+        return "\(error.signInMessage ?? "Google didn't accept the change.") \(outcome)"
     }
 }

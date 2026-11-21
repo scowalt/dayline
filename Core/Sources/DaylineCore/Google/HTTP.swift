@@ -5,6 +5,7 @@ public struct HTTPRequest: Hashable, Sendable {
         case get = "GET"
         case post = "POST"
         case patch = "PATCH"
+        case delete = "DELETE"
     }
 
     public var method: Method

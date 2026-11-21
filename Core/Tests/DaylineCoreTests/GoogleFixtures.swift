@@ -328,6 +328,21 @@ enum GoogleFixtures {
             },
             {
               "kind": "calendar#event",
+              "id": "standup_20261123T143000Z",
+              "status": "confirmed",
+              "summary": "Team standup",
+              "organizer": { "email": "alex.rivera@example.com", "self": true },
+              "start": { "dateTime": "2026-11-23T10:00:00-05:00", "timeZone": "America/New_York" },
+              "end": { "dateTime": "2026-11-23T10:15:00-05:00", "timeZone": "America/New_York" },
+              "recurringEventId": "standup",
+              "originalStartTime": { "dateTime": "2026-11-23T09:30:00-05:00", "timeZone": "America/New_York" },
+              "attendees": [
+                { "email": "alex.rivera@example.com", "self": true, "organizer": true, "responseStatus": "accepted" },
+                { "email": "jordan@example.com", "responseStatus": "accepted" }
+              ]
+            },
+            {
+              "kind": "calendar#event",
               "id": "portlandtrip",
               "status": "confirmed",
               "summary": "Trip to Portland",
@@ -382,6 +397,33 @@ enum GoogleFixtures {
               "outOfOfficeProperties": { "autoDeclineMode": "declineOnlyNewConflictingInvitations" }
             }
           ]
+        }
+        """#
+
+    static let standupSeries = #"""
+        {
+          "kind": "calendar#event",
+          "id": "standup",
+          "status": "confirmed",
+          "summary": "Team standup",
+          "start": { "dateTime": "2026-11-02T09:30:00-05:00", "timeZone": "America/New_York" },
+          "end": { "dateTime": "2026-11-02T09:45:00-05:00", "timeZone": "America/New_York" },
+          "recurrence": [
+            "EXDATE;TZID=America/New_York:20261111T093000",
+            "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;COUNT=40"
+          ]
+        }
+        """#
+
+    static let trashNightSeries = #"""
+        {
+          "kind": "calendar#event",
+          "id": "trashnight",
+          "status": "confirmed",
+          "summary": "Trash night",
+          "start": { "date": "2026-11-06" },
+          "end": { "date": "2026-11-07" },
+          "recurrence": ["RRULE:FREQ=WEEKLY;UNTIL=20270101;BYDAY=FR"]
         }
         """#
 }

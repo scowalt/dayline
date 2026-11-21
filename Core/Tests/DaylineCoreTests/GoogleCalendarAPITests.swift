@@ -87,7 +87,8 @@ struct GoogleCalendarAPITests {
             webURL: URL(string: "https://www.google.com/calendar/event?eid=NXFrOGMxdjNmMGQydDluNmU0bTdiMWEwczggYWxleC5yaXZlcmFAZXhhbXBsZS5jb20"),
             color: RGBColor(hex: "#D50000"),
             attendance: .accepted,
-            attendeeCount: 3
+            attendeeCount: 3,
+            canDelete: true
         ))
 
         let zoom = try #require(events["zoomsync01"])
@@ -113,7 +114,9 @@ struct GoogleCalendarAPITests {
             id: EventID(calendar: primary, event: "blanktitle"),
             title: "(No title)",
             time: .timed(start: utc(2026, 11, 22, 15, 0), end: utc(2026, 11, 22, 15, 0)),
-            canReschedule: true
+            canReschedule: true,
+            isOrganizer: true,
+            canDelete: true
         ))
     }
 
@@ -147,12 +150,95 @@ struct GoogleCalendarAPITests {
         try GoogleCalendarAPI.rescheduleResult(from: GoogleFixtures.response("{}"))
     }
 
+    @Test func recurringInstancesPointAtTheirSeriesAndOriginalSlot() throws {
+        let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsLastPage), calendar: owned)
+        let events = Dictionary(uniqueKeysWithValues: page.items.map { ($0.id.event, $0) })
+
+        let standup = try #require(events["standup_20261123T143000Z"])
+        #expect(standup.time == .timed(start: utc(2026, 11, 23, 15, 0), end: utc(2026, 11, 23, 15, 15)))
+        #expect(standup.occurrence == Occurrence(series: EventID(calendar: primary, event: "standup"), originalStart: .moment(utc(2026, 11, 23, 14, 30))))
+        #expect(standup.isOrganizer)
+
+        let trash = try #require(events["trashnight_20261120"])
+        #expect(trash.occurrence == Occurrence(series: EventID(calendar: primary, event: "trashnight"), originalStart: .day(CivilDate(year: 2026, month: 11, day: 20))))
+        #expect(!trash.isOrganizer)
+        #expect(events["portlandtrip"]?.occurrence == nil)
+    }
+
+    @Test func deletionChoicesDependOnRecurrenceAndWhoMayEditTheSeries() throws {
+        let response = GoogleFixtures.response(GoogleFixtures.eventsLastPage)
+        let writable = Dictionary(uniqueKeysWithValues: try GoogleCalendarAPI.eventsPage(from: response, calendar: owned).items.map { ($0.id.event, $0) })
+        let readOnly = try GoogleCalendarAPI.eventsPage(from: response, calendar: subscribed).items
+
+        #expect(writable["standup_20261123T143000Z"]?.deletionScopes == [.thisEvent, .thisAndFollowing, .allEvents])
+        #expect(writable["trashnight_20261120"]?.deletionScopes == [.thisEvent, .allEvents])
+        #expect(writable["portlandtrip"]?.deletionScopes == [.thisEvent])
+        #expect(readOnly.allSatisfy { $0.deletionScopes.isEmpty })
+    }
+
+    @Test func deleteRequestTargetsTheEventAndSaysWhetherToEmailGuests() {
+        let event = EventID(calendar: CalendarID(rawValue: "team#x@group.calendar.google.com"), event: "abc_20261120T160000Z")
+        let request = GoogleCalendarAPI.deleteRequest(event, notifyGuests: true)
+
+        #expect(request.method == .delete)
+        #expect(request.url.absoluteString == "https://www.googleapis.com/calendar/v3/calendars/team%23x%40group.calendar.google.com/events/abc_20261120T160000Z?sendUpdates=all")
+        #expect(request.body == nil)
+        #expect(GoogleCalendarAPI.deleteRequest(event, notifyGuests: false).url.query() == "sendUpdates=none")
+        #expect(GoogleCalendarAPI.eventRequest(event).url.absoluteString == "https://www.googleapis.com/calendar/v3/calendars/team%23x%40group.calendar.google.com/events/abc_20261120T160000Z")
+    }
+
+    @Test func deletingTimedOccurrencesFromAnInstanceOnEndsTheSeriesASecondBeforeIt() throws {
+        let series = EventID(calendar: primary, event: "standup")
+        let request = try GoogleCalendarAPI.followingDeletionRequest(
+            series: series,
+            from: .moment(utc(2026, 11, 23, 14, 30)),
+            master: GoogleFixtures.response(GoogleFixtures.standupSeries),
+            notifyGuests: true
+        )
+
+        #expect(request.method == .patch)
+        #expect(request.url.absoluteString == "https://www.googleapis.com/calendar/v3/calendars/alex.rivera%40example.com/events/standup?sendUpdates=all")
+        #expect(String(decoding: try #require(request.body), as: UTF8.self) == #"{"recurrence":["EXDATE;TZID=America/New_York:20261111T093000","RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;UNTIL=20261123T142959Z"]}"#)
+    }
+
+    @Test func deletingAllDayOccurrencesFromAnInstanceOnEndsTheSeriesTheDayBefore() throws {
+        let request = try GoogleCalendarAPI.followingDeletionRequest(
+            series: EventID(calendar: primary, event: "trashnight"),
+            from: .day(CivilDate(year: 2026, month: 11, day: 20)),
+            master: GoogleFixtures.response(GoogleFixtures.trashNightSeries),
+            notifyGuests: false
+        )
+
+        #expect(request.url.query() == "sendUpdates=none")
+        #expect(String(decoding: try #require(request.body), as: UTF8.self) == #"{"recurrence":["RRULE:FREQ=WEEKLY;BYDAY=FR;UNTIL=20261119"]}"#)
+    }
+
+    @Test func deletingFromTheFirstOccurrenceOnDeletesTheWholeSeries() throws {
+        let series = EventID(calendar: primary, event: "standup")
+        let request = try GoogleCalendarAPI.followingDeletionRequest(
+            series: series,
+            from: .moment(utc(2026, 11, 2, 14, 30)),
+            master: GoogleFixtures.response(GoogleFixtures.standupSeries),
+            notifyGuests: false
+        )
+
+        #expect(request == GoogleCalendarAPI.deleteRequest(series, notifyGuests: false))
+    }
+
+    @Test func anEventGoogleAlreadyDeletedCountsAsDeleted() throws {
+        try GoogleCalendarAPI.deletionResult(from: GoogleFixtures.response("", status: 204))
+        try GoogleCalendarAPI.deletionResult(from: GoogleFixtures.response("", status: 410))
+        #expect(throws: GoogleError.insufficientScope) {
+            try GoogleCalendarAPI.deletionResult(from: GoogleFixtures.response(GoogleFixtures.insufficientScope, status: 403))
+        }
+    }
+
     @Test func allDayEndDatesBecomeInclusiveAndCancelledOrWorkingLocationEventsDisappear() throws {
         let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsLastPage), calendar: owned)
         #expect(page.nextPageToken == nil)
         let events = Dictionary(uniqueKeysWithValues: page.items.map { ($0.id.event, $0) })
 
-        #expect(Set(events.keys) == ["trashnight_20261120", "portlandtrip", "redeye", "ooo"])
+        #expect(Set(events.keys) == ["trashnight_20261120", "standup_20261123T143000Z", "portlandtrip", "redeye", "ooo"])
         #expect(events["trashnight_20261120"]?.time == .allDay(first: CivilDate(year: 2026, month: 11, day: 20), last: CivilDate(year: 2026, month: 11, day: 20)))
         #expect(events["trashnight_20261120"]?.color == RGBColor(hex: "#F6BF26"))
         #expect(events["portlandtrip"]?.time == .allDay(first: CivilDate(year: 2026, month: 11, day: 30), last: CivilDate(year: 2026, month: 12, day: 2)))
