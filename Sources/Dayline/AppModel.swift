@@ -123,12 +123,13 @@ final class AppModel {
 
     func start() async {
         guard case .launching = phase else { return }
+        watchNetwork()
         guard let session = await service.restore() else {
             phase = .signedOut(nil)
             return
         }
         phase = .signedIn(SignedIn(session, outbox: storedOutbox(for: session)))
-        watchNetwork()
+        await drain()
         await refresh()
     }
 
