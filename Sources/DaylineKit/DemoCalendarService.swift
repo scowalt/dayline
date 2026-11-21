@@ -5,6 +5,7 @@ public actor DemoCalendarService: CalendarService {
     private let store: SnapshotStore?
     private var signedOut: [Account.ID] = []
     private var rescheduled: [EventID: EventTime] = [:]
+    private var deletions: [Deletion] = []
 
     public init(store: SnapshotStore? = .shared) {
         self.store = store
@@ -39,8 +40,15 @@ public actor DemoCalendarService: CalendarService {
         _ = makeSession()
     }
 
+    public func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError) {
+        try? await Task.sleep(for: .milliseconds(400))
+        deletions.append(deletion)
+        _ = makeSession()
+    }
+
     private func makeSession() -> Session? {
-        let sample = rescheduled.reduce(Snapshot.sample(now: .now, calendar: .current)) { $0.rescheduling($1.key, to: $1.value) }
+        let moved = rescheduled.reduce(Snapshot.sample(now: .now, calendar: .current)) { $0.rescheduling($1.key, to: $1.value) }
+        let sample = deletions.reduce(moved) { $0.deleting($1) }
         let snapshot = signedOut.reduce(sample) { $0.removing($1) }
         guard !snapshot.accounts.isEmpty else { return nil }
         try? store?.save(snapshot, as: .app)

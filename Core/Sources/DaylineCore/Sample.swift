@@ -75,7 +75,7 @@ private struct SampleBuilder {
     func events() -> [CalendarEvent] {
         [
             timed(work, "focus", "Focus time", day: 0, at: 8, 0, minutes: 90, attendance: .accepted),
-            timed(work, "standup", "Team standup", day: 0, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted),
+            timed(work, "standup", "Team standup", day: 0, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted, series: "standup-series"),
             timed(work, "design", "Design review: onboarding", day: 0, at: 11, 0, minutes: 60, location: "Room 4B", meet: "kmn-opqr-stu", attendees: 5, attendance: .accepted),
             timed(work, "interview", "Interview loop sync", day: 0, at: 11, 30, minutes: 30, attendees: 4, attendance: .tentative),
             timed(personal, "lunch", "Lunch with Sam", day: 0, at: 12, 30, minutes: 60, location: "Tartine Manufactory"),
@@ -84,7 +84,7 @@ private struct SampleBuilder {
             timed(family, "pickup", "Pick up Maya", day: 0, at: 17, 15, minutes: 30, location: "Lincoln Elementary"),
             timed(personal, "climb", "Climbing", day: 0, at: 19, 0, minutes: 120, location: "Mission Cliffs"),
             allDay(family, "trash", "Trash night", day: 0),
-            timed(work, "standup-1", "Team standup", day: 1, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted),
+            timed(work, "standup-1", "Team standup", day: 1, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted, series: "standup-series"),
             timed(work, "oneonone", "1:1 with Jordan", day: 1, at: 10, 0, minutes: 30, meet: "fgh-ijkl-mno", attendees: 2, attendance: .accepted),
             timed(personal, "dentist", "Dentist", day: 1, at: 15, 0, minutes: 45, location: "450 Sutter St"),
             timed(work, "late", "Sync with Tokyo team", day: 1, at: 22, 30, minutes: 60, meet: "pqr-stuv-wxy", attendees: 6, attendance: .accepted),
@@ -92,7 +92,7 @@ private struct SampleBuilder {
             timed(family, "dinner", "Family dinner", day: 3, at: 18, 30, minutes: 120, location: "Grandma's"),
             allDay(personal, "trip", "Trip to Portland", day: 5, through: 7),
             timed(personal, "flight", "Flight AS 1123 SFO → PDX", day: 5, at: 7, 10, minutes: 105, location: "SFO Terminal 2"),
-            timed(work, "standup-8", "Team standup", day: 8, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted),
+            timed(work, "standup-8", "Team standup", day: 8, at: 9, 30, minutes: 15, meet: "abc-defg-hij", attendees: 8, attendance: .accepted, series: "standup-series"),
             timed(work, "offsite", "Team offsite", day: 9, at: 9, 0, minutes: 480, location: "Presidio Officers' Club", attendees: 14, attendance: .accepted),
         ]
     }
@@ -109,9 +109,11 @@ private struct SampleBuilder {
         notes: String? = nil,
         meet: String? = nil,
         attendees: Int = 0,
-        attendance: Attendance? = nil
+        attendance: Attendance? = nil,
+        series: String? = nil
     ) -> CalendarEvent {
         let start = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today.adding(days: day, in: calendar).start(in: calendar))!
+        let isOrganizer = owner.canEditEvents && (attendance == nil || attendance == .accepted)
         return CalendarEvent(
             id: EventID(calendar: owner.id, event: id),
             title: title,
@@ -122,7 +124,10 @@ private struct SampleBuilder {
             webURL: URL(string: "https://calendar.google.com/calendar/event?eid=\(id)"),
             attendance: attendance,
             attendeeCount: attendees,
-            canReschedule: owner.canEditEvents && (attendance == nil || attendance == .accepted)
+            canReschedule: isOrganizer,
+            occurrence: series.map { Occurrence(series: EventID(calendar: owner.id, event: $0), originalStart: .moment(start)) },
+            isOrganizer: isOrganizer,
+            canDelete: owner.canEditEvents
         )
     }
 
@@ -131,7 +136,8 @@ private struct SampleBuilder {
             id: EventID(calendar: owner.id, event: id),
             title: title,
             time: .allDay(first: today.adding(days: day, in: calendar), last: today.adding(days: last ?? day, in: calendar)),
-            webURL: URL(string: "https://calendar.google.com/calendar/event?eid=\(id)")
+            webURL: URL(string: "https://calendar.google.com/calendar/event?eid=\(id)"),
+            canDelete: owner.canEditEvents
         )
     }
 }

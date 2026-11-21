@@ -87,6 +87,44 @@ public enum EventTime: Hashable, Codable, Sendable {
     }
 }
 
+public enum OccurrenceStart: Hashable, Comparable, Codable, Sendable {
+    case day(CivilDate)
+    case moment(Date)
+}
+
+public struct Occurrence: Hashable, Codable, Sendable {
+    public let series: EventID
+    public let originalStart: OccurrenceStart
+
+    public init(series: EventID, originalStart: OccurrenceStart) {
+        self.series = series
+        self.originalStart = originalStart
+    }
+}
+
+public enum DeletionScope: Hashable, Sendable {
+    case thisEvent
+    case thisAndFollowing
+    case allEvents
+}
+
+public enum Deletion: Hashable, Sendable {
+    case event(EventID)
+    case series(EventID)
+    case following(series: EventID, from: OccurrenceStart)
+
+    public func removes(_ event: CalendarEvent) -> Bool {
+        switch self {
+        case .event(let id):
+            event.id == id
+        case .series(let series):
+            event.occurrence?.series == series
+        case .following(let series, let start):
+            event.occurrence.map { $0.series == series && $0.originalStart >= start } ?? false
+        }
+    }
+}
+
 public enum Attendance: String, Hashable, Codable, Sendable {
     case accepted
     case tentative
@@ -124,6 +162,9 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     public var attendance: Attendance?
     public var attendeeCount: Int
     public var canReschedule: Bool
+    public var occurrence: Occurrence?
+    public var isOrganizer: Bool
+    public var canDelete: Bool
 
     public init(
         id: EventID,
@@ -136,7 +177,10 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         color: RGBColor? = nil,
         attendance: Attendance? = nil,
         attendeeCount: Int = 0,
-        canReschedule: Bool = false
+        canReschedule: Bool = false,
+        occurrence: Occurrence? = nil,
+        isOrganizer: Bool = false,
+        canDelete: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -149,9 +193,29 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         self.attendance = attendance
         self.attendeeCount = attendeeCount
         self.canReschedule = canReschedule
+        self.occurrence = occurrence
+        self.isOrganizer = isOrganizer
+        self.canDelete = canDelete
     }
 
     public var calendarID: CalendarID { id.calendar }
+
+    public var deletionScopes: [DeletionScope] {
+        guard canDelete else { return [] }
+        guard occurrence != nil else { return [.thisEvent] }
+        return canReschedule ? [.thisEvent, .thisAndFollowing, .allEvents] : [.thisEvent, .allEvents]
+    }
+
+    public func deletion(_ scope: DeletionScope) -> Deletion {
+        switch (scope, occurrence) {
+        case (.thisEvent, _), (_, nil):
+            .event(id)
+        case (.thisAndFollowing, let occurrence?):
+            .following(series: occurrence.series, from: occurrence.originalStart)
+        case (.allEvents, let occurrence?):
+            .series(occurrence.series)
+        }
+    }
 }
 
 public struct Account: Hashable, Codable, Sendable {
@@ -220,6 +284,14 @@ public struct Snapshot: Hashable, Codable, Sendable {
             for eventIndex in snapshot.accounts[index].events.indices where snapshot.accounts[index].events[eventIndex].id == event {
                 snapshot.accounts[index].events[eventIndex].time = time
             }
+        }
+        return snapshot
+    }
+
+    public func deleting(_ deletion: Deletion) -> Snapshot {
+        var snapshot = self
+        for index in snapshot.accounts.indices {
+            snapshot.accounts[index].events.removeAll(where: deletion.removes)
         }
         return snapshot
     }

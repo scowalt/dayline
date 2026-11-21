@@ -152,6 +152,33 @@ struct MultiAccountSnapshotTests {
         #expect(moved.accounts.flatMap(\.events).filter { $0.id != shared } == sharedSnapshot.accounts.flatMap(\.events).filter { $0.id != shared })
     }
 
+    @Test func eachDeletionScopeRemovesItsOccurrencesFromEveryAccount() {
+        let work = calendar("work")
+        let series = EventID(calendar: work.id, event: "standup")
+        let days = (0..<4).map { now.addingTimeInterval(Double($0) * 86_400) }
+        let standups = days.enumerated().map { index, day in
+            CalendarEvent(
+                id: EventID(calendar: work.id, event: "standup_\(index)"),
+                title: "standup \(index)",
+                time: .timed(start: day.addingTimeInterval(index == 2 ? -7200 : 0), end: day),
+                occurrence: Occurrence(series: series, originalStart: .moment(day))
+            )
+        }
+        let lunch = event(work, "lunch", title: "lunch")
+        let both = snapshot([
+            AccountSnapshot(account: first, calendars: [work], events: standups + [lunch]),
+            AccountSnapshot(account: second, calendars: [work], events: standups),
+        ])
+        func remaining(after scope: DeletionScope, of event: CalendarEvent) -> [[String]] {
+            both.deleting(event.deletion(scope)).accounts.map { $0.events.map(\.title) }
+        }
+
+        #expect(remaining(after: .thisEvent, of: standups[1]) == [["standup 0", "standup 2", "standup 3", "lunch"], ["standup 0", "standup 2", "standup 3"]])
+        #expect(remaining(after: .thisAndFollowing, of: standups[2]) == [["standup 0", "standup 1", "lunch"], ["standup 0", "standup 1"]])
+        #expect(remaining(after: .allEvents, of: standups[3]) == [["lunch"], []])
+        #expect(remaining(after: .allEvents, of: lunch) == [["standup 0", "standup 1", "standup 2", "standup 3"], ["standup 0", "standup 1", "standup 2", "standup 3"]])
+    }
+
     @Test func anEventIsChangedThroughTheAccountThatOwnsItsCalendar() {
         #expect(sharedSnapshot.account(owning: CalendarID(rawValue: "shared")) == first)
         #expect(sharedSnapshot.account(owning: CalendarID(rawValue: "other")) == second)

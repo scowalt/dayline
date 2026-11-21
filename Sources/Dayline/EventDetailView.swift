@@ -13,6 +13,9 @@ struct EventDetailView: View {
                 EventDetails(event: event, calendarInfo: snapshot.calendar(event.calendarID), color: snapshot.color(of: event)) {
                     model.hideEvents(titled: event.title)
                     dismiss()
+                } delete: { scope, notifyGuests in
+                    dismiss()
+                    Task { await model.delete(event, scope: scope, notifyGuests: notifyGuests) }
                 }
             } else {
                 ContentUnavailableView(
@@ -31,8 +34,11 @@ private struct EventDetails: View {
     let calendarInfo: CalendarInfo?
     let color: Color
     let hideTitle: () -> Void
+    let delete: (DeletionScope, Bool) -> Void
     @Environment(\.calendar) private var calendar
     @Environment(\.openURL) private var openURL
+    @State private var isChoosingScope = false
+    @State private var cancellationScope: DeletionScope?
 
     var body: some View {
         List {
@@ -133,8 +139,44 @@ private struct EventDetails: View {
             } footer: {
                 Text("Show them again in Settings.")
             }
+            if !event.deletionScopes.isEmpty {
+                Section {
+                    Button("Delete Event", systemImage: "trash", role: .destructive) {
+                        isChoosingScope = true
+                    }
+                    .confirmationDialog("Delete “\(event.title)”?", isPresented: $isChoosingScope, titleVisibility: .visible) {
+                        ForEach(event.deletionScopes, id: \.self) { scope in
+                            Button(event.occurrence == nil ? "Delete Event" : scope.title, role: .destructive) {
+                                choose(scope)
+                            }
+                        }
+                    } message: {
+                        Text(event.occurrence == nil ? "It's also removed from Google Calendar." : "This is a repeating event.")
+                    }
+                    .confirmationDialog(
+                        "Send cancellation to guests?",
+                        isPresented: Binding(get: { cancellationScope != nil }, set: { if !$0 { cancellationScope = nil } }),
+                        titleVisibility: .visible,
+                        presenting: cancellationScope
+                    ) { scope in
+                        Button("Send") { delete(scope, true) }
+                        Button("Don't Send") { delete(scope, false) }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { _ in
+                        Text("“\(event.title)” is cancelled for everyone invited.")
+                    }
+                }
+            }
         }
         .listStyle(.insetGrouped)
+    }
+
+    private func choose(_ scope: DeletionScope) {
+        if event.isOrganizer, event.attendeeCount > 1 {
+            cancellationScope = scope
+        } else {
+            delete(scope, false)
+        }
     }
 
     private var when: (date: String, time: String) {
@@ -171,6 +213,16 @@ private struct EventDetails: View {
         components.path = "/"
         components.queryItems = [URLQueryItem(name: "q", value: location)]
         return components.url!
+    }
+}
+
+extension DeletionScope {
+    fileprivate var title: String {
+        switch self {
+        case .thisEvent: "This Event"
+        case .thisAndFollowing: "This and Following Events"
+        case .allEvents: "All Events"
+        }
     }
 }
 

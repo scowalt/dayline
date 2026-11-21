@@ -29,4 +29,5 @@ public protocol CalendarService: Sendable {
     func refresh() async throws(CalendarServiceError) -> Session
     func signOut(_ account: Account.ID) async -> Session?
     func reschedule(_ event: EventID, of account: Account.ID, to time: EventTime, notifyGuests: Bool) async throws(CalendarServiceError)
+    func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError)
 }
