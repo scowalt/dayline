@@ -3,12 +3,14 @@ import Foundation
 
 public actor DemoCalendarService: CalendarService {
     private let store: SnapshotStore?
+    private let isOffline: Bool
     private var signedOut: [Account.ID] = []
     private var rescheduled: [EventID: EventTime] = [:]
     private var deletions: [Deletion] = []
 
-    public init(store: SnapshotStore? = .shared) {
+    public init(store: SnapshotStore? = .shared, isOffline: Bool = false) {
         self.store = store
+        self.isOffline = isOffline
     }
 
     public func restore() async -> Session? {
@@ -34,15 +36,15 @@ public actor DemoCalendarService: CalendarService {
         return session
     }
 
-    public func reschedule(_ event: EventID, of account: Account.ID, to time: EventTime, notifyGuests: Bool) async throws(CalendarServiceError) {
+    public func send(_ pending: PendingChange) async throws(CalendarServiceError) {
         try? await Task.sleep(for: .milliseconds(400))
-        rescheduled[event] = time
-        _ = makeSession()
-    }
-
-    public func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError) {
-        try? await Task.sleep(for: .milliseconds(400))
-        deletions.append(deletion)
+        if isOffline { throw .offline }
+        switch pending.change {
+        case .move(let event, let time):
+            rescheduled[event] = time
+        case .delete(let deletion):
+            deletions.append(deletion)
+        }
         _ = makeSession()
     }
 

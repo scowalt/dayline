@@ -17,6 +17,7 @@ public enum CalendarServiceError: Error, Hashable, Sendable {
     case cancelled
     case sessionExpired
     case offline
+    case unavailable
     case missingEditPermission
     case failed(String)
 }
@@ -28,6 +29,18 @@ public protocol CalendarService: Sendable {
     func signIn(authorize: WebAuthorizer, loginHint: String?) async throws(CalendarServiceError) -> Session
     func refresh() async throws(CalendarServiceError) -> Session
     func signOut(_ account: Account.ID) async -> Session?
-    func reschedule(_ event: EventID, of account: Account.ID, to time: EventTime, notifyGuests: Bool) async throws(CalendarServiceError)
-    func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError)
+    func send(_ change: PendingChange) async throws(CalendarServiceError)
+}
+
+extension CalendarServiceError {
+    public var outcome: SendOutcome<CalendarServiceError> {
+        switch self {
+        case .offline, .unavailable, .cancelled:
+            .retryLater
+        case .sessionExpired:
+            .accountBlocked
+        case .missingEditPermission, .failed:
+            .rejected(self)
+        }
+    }
 }

@@ -80,7 +80,7 @@ nonisolated struct UpNextProvider: TimelineProvider {
             completion(context.isPreview ? .sample(at: now) : UpNextEntry(date: now, snapshot: nil, visibility: CalendarVisibility(), calendar: .current))
             return
         }
-        completion(UpNextEntry(date: now, snapshot: snapshot, visibility: CalendarPreferences().visibility, calendar: .current))
+        completion(UpNextEntry(date: now, snapshot: snapshot.applying(OutboxStore.shared?.load() ?? Outbox()), visibility: CalendarPreferences().visibility, calendar: .current))
     }
 
     func getTimeline(in context: Context, completion: @escaping @Sendable (Timeline<UpNextEntry>) -> Void) {
@@ -92,7 +92,7 @@ nonisolated struct UpNextProvider: TimelineProvider {
                 await LiveCalendarService(writer: .widget).refreshIfStale(maxAge: .seconds(15 * 60))
             }
             let now = Date.now
-            let entries = UpNextEntry.timeline(snapshot: snapshot, visibility: preferences.visibility, now: now, calendar: .current)
+            let entries = UpNextEntry.timeline(snapshot: snapshot?.applying(OutboxStore.shared?.load() ?? Outbox()), visibility: preferences.visibility, now: now, calendar: .current)
             completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
         }
     }

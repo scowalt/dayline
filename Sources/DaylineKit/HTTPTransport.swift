@@ -45,6 +45,8 @@ struct HTTPTransport: Sendable {
             throw .cancelled
         } catch is CancellationError {
             throw .cancelled
+        } catch is URLError {
+            throw .unavailable
         } catch {
             throw .failed(error.localizedDescription)
         }
