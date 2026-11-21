@@ -47,7 +47,7 @@ struct ScheduleView: View {
             }
             ColumnHeaders(days: days, today: today, events: events, snapshot: snapshot, open: open)
             Divider()
-            ScheduleGrid(days: days, events: events, snapshot: snapshot, now: now, open: open) { event, time, notifyGuests in
+            ScheduleGrid(dates: dates, days: days, shownStart: Binding(get: { start }, set: { firstDay = $0 }), events: events, snapshot: snapshot, now: now, open: open) { event, time, notifyGuests in
                 Task { await model.reschedule(event, to: time, notifyGuests: notifyGuests) }
             }
         }
@@ -171,10 +171,12 @@ struct ScheduleGrid: View {
     static let gutter: CGFloat = 52
     static let hourHeight: CGFloat = 56
     private static let pointsPerMinute = hourHeight / 60
-    private static let space = "schedule-grid"
+    private static let viewport = "schedule-viewport"
     private static let edge: CGFloat = 56
 
+    let dates: [CivilDate]
     let days: [CivilDate]
+    @Binding var shownStart: CivilDate
     let events: [CalendarEvent]
     let snapshot: Snapshot
     let now: Date
@@ -182,10 +184,11 @@ struct ScheduleGrid: View {
     let commit: (CalendarEvent, EventTime, Bool) -> Void
 
     @Environment(\.calendar) private var calendar
-    @GestureState private var drag: EventDrag?
+    @State private var drag: EventDrag?
     @State private var confirming: Move?
     @State private var width: CGFloat = 0
     @State private var position = ScrollPosition(edge: .top)
+    @State private var page = ScrollPosition(idType: CivilDate.self)
     @State private var scroll = ScrollState()
     @State private var lifts = 0
     @State private var isPlaced = false
@@ -194,20 +197,15 @@ struct ScheduleGrid: View {
         ScrollView {
             ZStack(alignment: .topLeading) {
                 hourLines
-                ForEach(Array(days.enumerated()), id: \.element) { column, day in
-                    ForEach(TimeGrid.placements(of: events, on: day, calendar: calendar), id: \.event.id) { placement in
-                        block(placement, column: column, day: day)
-                    }
-                }
-                nowLine
+                dayPages
                 if let move = shownMove {
                     ghost(move)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: Self.hourHeight * 24, maxHeight: Self.hourHeight * 24, alignment: .topLeading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .coordinateSpace(.named(Self.space))
         }
+        .coordinateSpace(.named(Self.viewport))
         .scrollPosition($position)
         .scrollDisabled(drag != nil)
         .onScrollGeometryChange(for: ScrollState.self) { geometry in
@@ -252,8 +250,8 @@ struct ScheduleGrid: View {
 
     private var shownMove: Move? {
         if let confirming { return confirming }
-        guard let drag, let value = drag.value else { return nil }
-        return move(for: drag, value: value)
+        guard let drag, let finger = drag.finger else { return nil }
+        return move(for: drag, finger: finger)
     }
 
     private var hourLines: some View {
@@ -277,32 +275,69 @@ struct ScheduleGrid: View {
         }
     }
 
-    @ViewBuilder private var nowLine: some View {
-        let today = CivilDate(now, in: calendar)
-        if let column = days.firstIndex(of: today) {
-            let y = CGFloat(TimeGrid.minute(of: now, from: today, calendar: calendar)) * Self.pointsPerMinute
+    private var dayPages: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                ForEach(dates, id: \.self) { day in
+                    ZStack(alignment: .topLeading) {
+                        ForEach(TimeGrid.placements(of: events, on: day, calendar: calendar), id: \.event.id) { placement in
+                            block(placement, day: day)
+                        }
+                        nowLine(on: day)
+                    }
+                    .containerRelativeFrame(.horizontal, count: days.count, spacing: 0, alignment: .topLeading)
+                    .frame(height: Self.hourHeight * 24, alignment: .topLeading)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition($page)
+        .onChange(of: page.viewID(type: CivilDate.self)) { _, day in
+            if let day {
+                shownStart = day
+            }
+        }
+        .onChange(of: shownStart) {
+            if page.viewID(type: CivilDate.self) != shownStart {
+                page.scrollTo(id: shownStart)
+            }
+        }
+        .onChange(of: columnWidth) {
+            page.scrollTo(id: shownStart)
+        }
+        .frame(height: Self.hourHeight * 24)
+        .padding(.leading, Self.gutter)
+    }
+
+    @ViewBuilder private func nowLine(on day: CivilDate) -> some View {
+        if day == CivilDate(now, in: calendar) {
+            let y = CGFloat(TimeGrid.minute(of: now, from: day, calendar: calendar)) * Self.pointsPerMinute
             HStack(spacing: 0) {
                 Circle().fill(.red).frame(width: 8, height: 8)
                 Rectangle().fill(.red).frame(height: 1.5)
             }
-            .frame(width: columnWidth + 4)
-            .offset(x: Self.gutter + CGFloat(column) * columnWidth - 4, y: y - 4)
+            .frame(width: columnWidth)
+            .offset(y: y - 4)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
     }
 
-    private func block(_ placement: TimeGridPlacement, column: Int, day: CivilDate) -> some View {
+    private func block(_ placement: TimeGridPlacement, day: CivilDate) -> some View {
         let event = placement.event
         let slot = columnWidth / CGFloat(placement.columnCount)
         let height = max(CGFloat(placement.endMinute - placement.startMinute) * Self.pointsPerMinute, 18)
         let isMoving = shownMove?.event.id == event.id
         return EventBlock(event: event, color: snapshot.color(of: event), height: height)
             .frame(width: max(0, slot - 2), height: height - 1)
-            .offset(x: Self.gutter + CGFloat(column) * columnWidth + CGFloat(placement.column) * slot + 1, y: CGFloat(placement.startMinute) * Self.pointsPerMinute)
+            .offset(x: CGFloat(placement.column) * slot + 1, y: CGFloat(placement.startMinute) * Self.pointsPerMinute)
             .opacity(isMoving ? 0.35 : 1)
             .onTapGesture { open(event.id) }
-            .gesture(moveGesture(event, from: day), including: event.canReschedule ? .all : .subviews)
+            .gesture(LiftGesture(isEnabled: event.canReschedule, space: .named(Self.viewport)) { state, finger in
+                track(event, from: day, state, at: finger)
+            })
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { open(event.id) }
             .accessibilityActions {
@@ -330,36 +365,28 @@ struct ScheduleGrid: View {
         }
     }
 
-    private func moveGesture(_ event: CalendarEvent, from day: CivilDate) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.35)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
-            .updating($drag) { value, state, _ in
-                guard case .second(true, let dragValue) = value else { return }
-                state = EventDrag(event: event, origin: day, value: dragValue)
+    private func track(_ event: CalendarEvent, from day: CivilDate, _ state: UIGestureRecognizer.State, at finger: CGPoint) {
+        switch state {
+        case .began:
+            let eventTop = CGFloat(TimeGrid.minute(of: event.time.interval(in: calendar).start, from: day, calendar: calendar)) * Self.pointsPerMinute
+            drag = EventDrag(event: event, origin: day, grab: finger.y + scroll.offset - eventTop)
+            lifts += 1
+        case .changed:
+            drag?.finger = finger
+        case .ended:
+            if let drag, drag.finger != nil {
+                propose(move(for: drag, finger: finger))
             }
-            .onChanged { value in
-                switch value {
-                case .second(true, nil):
-                    lifts += 1
-                case .second(true, .some):
-                    scroll.offsetAtTouch = scroll.offset
-                default:
-                    break
-                }
-            }
-            .onEnded { value in
-                guard case .second(true, let dragValue?) = value else { return }
-                propose(move(for: EventDrag(event: event, origin: day, value: dragValue), value: dragValue))
-            }
+            drag = nil
+        default:
+            drag = nil
+        }
     }
 
-    private func move(for drag: EventDrag, value: DragGesture.Value) -> Move {
-        let eventTop = CGFloat(TimeGrid.minute(of: drag.event.time.interval(in: calendar).start, from: drag.origin, calendar: calendar)) * Self.pointsPerMinute
-        let grab = value.startLocation.y - eventTop
-        let fingerY = value.location.y + scroll.offset - scroll.offsetAtTouch
-        let column = columnWidth > 0 ? Int(((value.location.x - Self.gutter) / columnWidth).rounded(.down)) : 0
+    private func move(for drag: EventDrag, finger: CGPoint) -> Move {
+        let column = columnWidth > 0 ? Int(((finger.x - Self.gutter) / columnWidth).rounded(.down)) : 0
         let day = days[min(max(column, 0), days.count - 1)]
-        let start = TimeGrid.snappedDate(atMinute: Double((fingerY - grab) / Self.pointsPerMinute), from: day, calendar: calendar)
+        let start = TimeGrid.snappedDate(atMinute: Double((finger.y + scroll.offset - drag.grab) / Self.pointsPerMinute), from: day, calendar: calendar)
         return Move(event: drag.event, time: drag.event.time.starting(at: start, in: calendar))
     }
 
@@ -385,8 +412,8 @@ struct ScheduleGrid: View {
 
     private func autoscroll() async {
         while drag != nil, !Task.isCancelled {
-            if let value = drag?.value {
-                let fingerY = value.location.y + scroll.offset - scroll.offsetAtTouch
+            if let finger = drag?.finger {
+                let fingerY = finger.y + scroll.offset
                 let step: CGFloat = if fingerY < scroll.visible.minY + Self.edge {
                     -8
                 } else if fingerY > scroll.visible.maxY - Self.edge {
@@ -412,13 +439,33 @@ private struct ScrollState: Equatable {
     var offset: CGFloat = 0
     var visible: CGRect = .zero
     var maxOffset: CGFloat = 0
-    var offsetAtTouch: CGFloat = 0
 }
 
 private struct EventDrag: Equatable {
     let event: CalendarEvent
     let origin: CivilDate
-    let value: DragGesture.Value?
+    let grab: CGFloat
+    var finger: CGPoint?
+}
+
+private struct LiftGesture: UIGestureRecognizerRepresentable {
+    let isEnabled: Bool
+    let space: NamedCoordinateSpace
+    let track: (UIGestureRecognizer.State, CGPoint) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
+        let recognizer = UILongPressGestureRecognizer()
+        recognizer.minimumPressDuration = 0.35
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UILongPressGestureRecognizer, context: Context) {
+        recognizer.isEnabled = isEnabled
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
+        track(recognizer.state, context.converter.location(in: space))
+    }
 }
 
 private struct Move: Equatable {
