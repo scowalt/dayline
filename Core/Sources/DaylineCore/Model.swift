@@ -108,7 +108,7 @@ public enum DeletionScope: Hashable, Sendable {
     case allEvents
 }
 
-public enum Deletion: Hashable, Sendable {
+public enum Deletion: Hashable, Codable, Sendable {
     case event(EventID)
     case series(EventID)
     case following(series: EventID, from: OccurrenceStart)
