@@ -97,32 +97,54 @@ struct MediumUpNextView: View {
     let colors: CalendarColors
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                DateHeader(date: now)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                DateHeader(date: now, compact: true)
+                    .layoutPriority(1)
                 Spacer(minLength: 0)
-                ForEach(glance.allDay.prefix(2)) { event in
-                    AllDayLine(event: event, color: colors.color(for: event))
-                }
-                if glance.allDay.count > 2 {
-                    Text("+\(glance.allDay.count - 2) all-day")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                AllDayStrip(events: glance.allDay, colors: colors)
             }
-            .frame(width: 96, alignment: .leading)
-            .frame(maxHeight: .infinity, alignment: .topLeading)
 
             FittingAgenda(
                 lines: AgendaLine.lines(for: glance, includeAllDay: false),
-                maxEvents: 4,
-                spacing: 6,
+                maxEvents: 8,
+                spacing: 2,
                 now: now,
                 colors: colors,
-                showsLocation: false
+                rowStyle: .oneLine
             )
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(DeepLink.today.url)
+    }
+}
+
+struct AllDayStrip: View {
+    let events: [CalendarEvent]
+    let colors: CalendarColors
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            strip(showing: 2)
+            strip(showing: 1)
+        }
+        .foregroundStyle(.secondary)
+    }
+
+    private func strip(showing count: Int) -> some View {
+        HStack(spacing: 10) {
+            ForEach(events.prefix(count)) { event in
+                Link(destination: DeepLink.event(event.id).url) {
+                    AllDayLine(event: event, color: colors.color(for: event))
+                }
+            }
+            if events.count > count {
+                Text("+\(events.count - count)")
+                    .font(.caption)
+                    .fixedSize()
+                    .accessibilityLabel(Text("\(events.count - count) more all-day events"))
+            }
+        }
     }
 }
 
@@ -150,7 +172,7 @@ struct LargeUpNextView: View {
                 spacing: 8,
                 now: now,
                 colors: colors,
-                showsLocation: true
+                rowStyle: .twoLine
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -188,13 +210,18 @@ enum AgendaLine {
     }
 }
 
+enum AgendaRowStyle {
+    case twoLine
+    case oneLine
+}
+
 struct FittingAgenda: View {
     let lines: [AgendaLine]
     let maxEvents: Int
     let spacing: CGFloat
     let now: Date
     let colors: CalendarColors
-    let showsLocation: Bool
+    let rowStyle: AgendaRowStyle
 
     var body: some View {
         let candidates = candidates
@@ -232,11 +259,23 @@ struct FittingAgenda: View {
         switch line {
         case .event(let event, let inProgress):
             Link(destination: DeepLink.event(event.id).url) {
-                EventRow(
-                    event: event,
-                    color: colors.color(for: event),
-                    detail: EventTimeText.detail(for: event, inProgress: inProgress, now: now, location: showsLocation)
-                )
+                switch rowStyle {
+                case .twoLine:
+                    EventRow(
+                        event: event,
+                        color: colors.color(for: event),
+                        detail: EventTimeText.detail(for: event, inProgress: inProgress, now: now, location: true)
+                    )
+                case .oneLine:
+                    EventLine(
+                        event: event,
+                        color: colors.color(for: event),
+                        time: inProgress
+                            ? EventTimeText.compact(for: event, inProgress: true, now: now)
+                            : EventTimeText.span(of: event, inProgress: false, now: now),
+                        inProgress: inProgress
+                    )
+                }
             }
         case .allDay(let event):
             Link(destination: DeepLink.event(event.id).url) {
