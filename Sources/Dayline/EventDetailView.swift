@@ -5,11 +5,15 @@ import SwiftUI
 struct EventDetailView: View {
     let model: AppModel
     let id: EventID
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if let snapshot = model.snapshot, let event = model.event(id) {
-                EventDetails(event: event, calendarInfo: snapshot.calendar(event.calendarID), color: snapshot.color(of: event))
+                EventDetails(event: event, calendarInfo: snapshot.calendar(event.calendarID), color: snapshot.color(of: event)) {
+                    model.hideEvents(titled: event.title)
+                    dismiss()
+                }
             } else {
                 ContentUnavailableView(
                     "Event Not Found",
@@ -26,6 +30,7 @@ private struct EventDetails: View {
     let event: CalendarEvent
     let calendarInfo: CalendarInfo?
     let color: Color
+    let hideTitle: () -> Void
     @Environment(\.calendar) private var calendar
     @Environment(\.openURL) private var openURL
 
@@ -122,6 +127,11 @@ private struct EventDetails: View {
                         Label("Open in Google Calendar", systemImage: "arrow.up.forward.app")
                     }
                 }
+            }
+            Section {
+                Button("Hide Events Titled “\(event.title)”", systemImage: "eye.slash", action: hideTitle)
+            } footer: {
+                Text("Show them again in Settings.")
             }
         }
         .listStyle(.insetGrouped)

@@ -18,6 +18,7 @@ The screenshots use the built-in demo data.
 - Settings lists each account with its calendars. You can add an account or sign out of one. If Google ends one account's session, its last events stay on screen and Settings offers Sign In Again. The other accounts keep working.
 - Agenda grouped by day, with all-day and multi-day events, a now marker, Meet join buttons and your response to each invitation.
 - Per-calendar show and hide, shared with the widgets.
+- Hide events by title, such as the "Personal event" blocks a calendar sync app copies in. Add a title in Settings or from an event's detail screen. Matching is exact but ignores capitalization, and the widgets hide the same events.
 - An Up Next widget in small, medium and large home-screen sizes and inline, rectangular and circular lock-screen sizes. Tapping an event opens it in the app.
 
 Dayline only reads your calendar (`calendar.readonly`). Calendar data stays on the phone. Each account's Google refresh token is stored in the Keychain. There is no server.

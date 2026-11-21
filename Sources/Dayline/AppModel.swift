@@ -199,6 +199,18 @@ final class AppModel {
         }
     }
 
+    func hideEvents(titled title: String) {
+        visibility.hide(title: title)
+        preferences.visibility = visibility
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func showEvents(titled title: String) {
+        visibility.show(title: title)
+        preferences.visibility = visibility
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
     func open(_ link: DeepLink) {
         pendingLink = link
     }

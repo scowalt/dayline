@@ -38,6 +38,47 @@ struct ModelTests {
         #expect(snapshot.events(visibleWith: CalendarVisibility()).map(\.title) == ["A"])
         #expect(snapshot.events(visibleWith: CalendarVisibility(overrides: [hidden.id: true, shown.id: false])).map(\.title) == ["B"])
     }
+
+    @Test func hiddenTitlesRemoveMatchingEventsIgnoringCaseAndSpacing() {
+        let work = CalendarInfo(id: CalendarID(rawValue: "a"), title: "Work", color: RGBColor(red: 0, green: 0, blue: 0), isPrimary: true, isSelectedInGoogle: true)
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let events = ["Personal event", "PERSONAL EVENT ", "Personal event with Sam", "Standup"].enumerated().map { index, title in
+            CalendarEvent(id: EventID(calendar: work.id, event: "\(index)"), title: title, time: .timed(start: now, end: now))
+        }
+        let snapshot = Snapshot(
+            accounts: [AccountSnapshot(account: Account(email: "a@b.c"), calendars: [work], events: events)],
+            range: DateInterval(start: now, duration: 0),
+            fetchedAt: now
+        )
+
+        var visibility = CalendarVisibility()
+        visibility.hide(title: "  personal Event")
+        #expect(visibility.hiddenTitles == ["personal Event"])
+        #expect(snapshot.events(visibleWith: visibility).map(\.title) == ["Personal event with Sam", "Standup"])
+
+        visibility.show(title: "Personal event")
+        #expect(visibility.hiddenTitles.isEmpty)
+        #expect(snapshot.events(visibleWith: visibility).count == 4)
+    }
+
+    @Test func hidingATitleTwiceOrBlankKeepsOneEntry() {
+        var visibility = CalendarVisibility()
+        visibility.hide(title: "Personal event")
+        visibility.hide(title: "personal event")
+        visibility.hide(title: "   ")
+        #expect(visibility.hiddenTitles == ["Personal event"])
+    }
+
+    @Test func visibilitySavedBeforeHiddenTitlesStillDecodes() throws {
+        let saved = Data(#"{"overrides":["a",false]}"#.utf8)
+        let visibility = try JSONDecoder().decode(CalendarVisibility.self, from: saved)
+        #expect(visibility == CalendarVisibility(overrides: [CalendarID(rawValue: "a"): false]))
+
+        var hiding = visibility
+        hiding.hide(title: "Personal event")
+        let roundTripped = try JSONDecoder().decode(CalendarVisibility.self, from: JSONEncoder().encode(hiding))
+        #expect(roundTripped == hiding)
+    }
 }
 
 struct MultiAccountSnapshotTests {
