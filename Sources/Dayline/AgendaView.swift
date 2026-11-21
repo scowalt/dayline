@@ -137,11 +137,13 @@ struct AgendaView: View {
     }
 
     private func status(now: Date) -> String {
+        let queued = state.outbox.changes.count
+        let unsynced = queued == 0 ? nil : queued == 1 ? "1 change not synced" : "\(queued) changes not synced"
         if state.isRefreshing {
-            return "Updating…"
+            return ["Updating…", unsynced].compactMap(\.self).joined(separator: " · ")
         }
-        let updated = state.snapshot.map { updatedText(fetchedAt: $0.fetchedAt, now: now) }
-        return [state.issueMessage, updated].compactMap(\.self).joined(separator: " · ")
+        let updated = state.base.map { updatedText(fetchedAt: $0.fetchedAt, now: now) }
+        return [state.issueMessage, unsynced, updated].compactMap(\.self).joined(separator: " · ")
     }
 
     private func updatedText(fetchedAt: Date, now: Date) -> String {
