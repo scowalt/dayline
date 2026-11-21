@@ -17,10 +17,11 @@ The screenshots use the built-in demo data.
 - Signs in with one or more Google accounts (Workspace or personal) and reads the next 14 days of events from the calendars you show. The agenda and widgets merge every account. A calendar shared with two of your accounts appears once, under the account with the most access to it, such as the account that owns it. When two accounts have the same access, the one you signed in to first gets it.
 - Settings lists each account with its calendars. You can add an account or sign out of one. If Google ends one account's session, its last events stay on screen and Settings offers Sign In Again. The other accounts keep working.
 - Agenda grouped by day, with all-day and multi-day events, a now marker, Meet join buttons and your response to each invitation.
-- Day and 3 Days views on an hourly grid, picked from the layout menu. Swipe left or right to change days. Touch and hold an event, then drag it to another time or day to move it. Drops snap to 15 minutes. If the event has other guests, Dayline asks whether to send them an update. If Google refuses the change, the event goes back to where it was.
-- Delete an event from its detail screen. For a repeating event, Dayline asks whether to delete this event, this and following events, or all events. If you organize the event and it has other guests, Dayline asks whether to send them a cancellation. If Google refuses, the event comes back.
+- Day and 3 Days views on an hourly grid, picked from the layout menu. Swipe left or right to change days. Touch and hold an event, then drag it to another time or day to move it. Drops snap to 15 minutes. If the event has other guests, Dayline asks whether to send them an update.
+- Delete an event from its detail screen. For a repeating event, Dayline asks whether to delete this event, this and following events, or all events. If you organize the event and it has other guests, Dayline asks whether to send them a cancellation.
+- Moves and deletes work offline. Dayline shows the change at once, keeps it on the phone, and sends it to Google once the phone is back online, even after the app is closed or restarted. Dayline retries when the connection returns, when you open the app, and when iOS gives it background time. The status line under the title shows "1 change not synced" until then. Moving the same event again replaces its queued move. Changes are sent as they were made, so the last writer wins: if someone else moved the event on Google in the meantime, your move replaces theirs. If Google refuses a queued change, for example because the event was deleted there, the event goes back and an alert says why. If Google ends an account's session, its changes wait until you sign in again. Signing out of an account drops its queued changes.
 - Per-calendar show and hide, shared with the widgets.
-- Share Diagnostics in Settings exports a text report for debugging sync: each account's calendars with your access and event counts, and the last 500 requests the app and widgets sent to Google, with status codes and Google's error messages. It leaves out event details and tokens.
+- Share Diagnostics in Settings exports a text report for debugging sync: each account's calendars with your access and event counts, the changes still queued to send, and the last 500 log entries of what the app and widgets sent to Google, including why each queued change was sent, kept, or dropped. It leaves out event titles, notes, and tokens.
 - Hide events by title, such as the "Personal event" blocks a calendar sync app copies in. Add a title in Settings or from an event's detail screen. Matching is exact but ignores capitalization, and the widgets hide the same events.
 - An Up Next widget in small, medium and large home-screen sizes and inline, rectangular and circular lock-screen sizes. Tapping an event opens it in the app.
 
@@ -31,7 +32,7 @@ Dayline reads your calendars, can move an event you drag in the Day or 3 Days vi
 | Path | Contents |
 | --- | --- |
 | `Core/` | `DaylineCore`: the model, Google OAuth and Calendar request building and decoding, agenda grouping and widget timelines. Builds and tests on Linux and macOS. |
-| `Sources/DaylineKit/` | Networking, Keychain, the shared snapshot store and preferences, used by the app and the widget. |
+| `Sources/DaylineKit/` | Networking, Keychain, the shared snapshot store, queued changes and preferences, used by the app and the widget. |
 | `Sources/Dayline/` | The app. |
 | `Sources/DaylineWidget/` | The widget extension. |
 | `Support/` | Info.plist and entitlement files. |
@@ -52,7 +53,7 @@ scripts/sim run -demo
 scripts/sim screenshot agenda.png
 ```
 
-The `-demo` launch argument signs in to sample data instead of Google.
+The `-demo` launch argument signs in to sample data instead of Google. Add `-offline` to make every move and delete fail as if the phone had no connection, so they stay queued. Relaunch with only `-demo` to send them.
 
 ## Install on an iPhone
 

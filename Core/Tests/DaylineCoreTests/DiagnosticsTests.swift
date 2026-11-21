@@ -59,6 +59,7 @@ struct DiagnosticsTests {
             accounts: [work, personal],
             issues: [personal.email: "failed(\"Google error 404: Not Found\")"],
             snapshot: snapshot,
+            outbox: Outbox(),
             visibility: CalendarVisibility(overrides: [personalCalendar.id: true], hiddenTitles: ["Secret project"]),
             log: log
         )
@@ -81,9 +82,45 @@ struct DiagnosticsTests {
 
             1 hidden titles match 1 events
 
+            Queued changes: none
+
             Sync log, oldest first
             2026-11-20T16:00:01Z app - first
             2026-11-20T16:00:02Z widget me@gmail.com second
+
+            """)
+    }
+
+    @Test func theReportListsQueuedChangesWithAgeAndGuestNoticeButNoTitles() {
+        let account = Account(email: "me@work.example")
+        let calendar = CalendarID(rawValue: "me@work.example")
+        let standup = EventID(calendar: calendar, event: "standup")
+        var outbox = Outbox()
+        outbox.enqueue(PendingChange(account: account.id, change: .move(standup, to: .timed(start: now, end: now)), notifyGuests: false, eventTitle: "Secret project", queuedAt: now.addingTimeInterval(-90)))
+        outbox.enqueue(PendingChange(account: account.id, change: .delete(.series(standup)), notifyGuests: true, eventTitle: "Secret project", queuedAt: now.addingTimeInterval(-7_500)))
+
+        let report = Diagnostics.report(
+            version: "1.0 (7)",
+            now: now,
+            timeZone: TimeZone(identifier: "GMT")!,
+            accounts: [],
+            issues: [:],
+            snapshot: nil,
+            outbox: outbox,
+            visibility: CalendarVisibility(),
+            log: []
+        )
+
+        #expect(report == """
+            Dayline 1.0 (7) diagnostics
+            Generated 2026-11-20T16:00:00Z in GMT
+            No snapshot
+
+            Queued changes: 2
+              - move me@work.example/standup, account me@work.example, queued 2026-11-20T15:58:30Z (1 min ago), notify guests no
+              - delete series me@work.example/standup, account me@work.example, queued 2026-11-20T13:55:00Z (2 h 5 min ago), notify guests yes
+
+            Sync log, oldest first
 
             """)
     }

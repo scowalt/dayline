@@ -16,8 +16,13 @@ struct RootView: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase == .active {
+                switch phase {
+                case .active:
                     Task { await model.refreshIfStale() }
+                case .background:
+                    model.scheduleBackgroundDrain()
+                default:
+                    break
                 }
             }
     }

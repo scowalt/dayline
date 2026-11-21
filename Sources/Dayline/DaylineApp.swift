@@ -10,5 +10,8 @@ struct DaylineApp: App {
             RootView(model: model)
                 .task { await model.start() }
         }
+        .backgroundTask(.appRefresh(AppModel.drainTaskIdentifier)) {
+            await model.drainInBackground()
+        }
     }
 }

@@ -1,6 +1,8 @@
 import DaylineCore
 import DaylineKit
+import BackgroundTasks
 import Foundation
+import Network
 import Observation
 import WidgetKit
 
@@ -15,25 +17,30 @@ final class AppModel {
 
     struct SignedIn: Equatable {
         var accounts: [Account]
-        var snapshot: Snapshot?
+        var base: Snapshot?
+        var outbox: Outbox
         var issues: [Account.ID: CalendarServiceError]
         var isRefreshing = false
         var isRefreshQueued = false
+        var isDraining = false
         var isAddingAccount = false
         var addAccountIssue: CalendarServiceError?
         var changeIssue: ChangeIssue?
 
-        init(_ session: Session) {
+        init(_ session: Session, outbox: Outbox) {
             accounts = session.accounts
-            snapshot = session.snapshot
+            base = session.snapshot
+            self.outbox = outbox
             issues = session.issues
         }
 
         mutating func adopt(_ session: Session) {
             accounts = session.accounts
-            snapshot = session.snapshot
+            base = session.snapshot
             issues = session.issues
         }
+
+        var snapshot: Snapshot? { base?.applying(outbox) }
 
         var firstIssue: (account: Account, error: CalendarServiceError)? {
             accounts.lazy.compactMap { account in issues[account.id].map { (account, $0) } }.first
@@ -61,16 +68,27 @@ final class AppModel {
         let error: CalendarServiceError
     }
 
+    static let drainTaskIdentifier = "com.scowalt.dayline.drain"
+
     private(set) var phase: Phase = .launching
     private(set) var visibility: CalendarVisibility
     private(set) var pendingLink: DeepLink?
     let isDemo: Bool
     private let service: any CalendarService
     private let preferences: CalendarPreferences
+    private let outboxStore: OutboxStore?
+    @ObservationIgnored private var pathMonitor: NWPathMonitor?
+    @ObservationIgnored private var sentCount = 0
 
-    init(service: any CalendarService, preferences: CalendarPreferences = CalendarPreferences(), isDemo: Bool = false) {
+    init(
+        service: any CalendarService,
+        preferences: CalendarPreferences = CalendarPreferences(),
+        outboxStore: OutboxStore? = .shared,
+        isDemo: Bool = false
+    ) {
         self.service = service
         self.preferences = preferences
+        self.outboxStore = outboxStore
         self.isDemo = isDemo
         preferences.usesDemoData = isDemo
         visibility = preferences.visibility
@@ -78,7 +96,7 @@ final class AppModel {
 
     convenience init(launchArguments: [String]) {
         if launchArguments.contains("-demo") {
-            self.init(service: DemoCalendarService(), isDemo: true)
+            self.init(service: DemoCalendarService(isOffline: launchArguments.contains("-offline")), isDemo: true)
         } else {
             self.init(service: LiveCalendarService(writer: .app))
         }
@@ -90,6 +108,8 @@ final class AppModel {
     }
 
     var snapshot: Snapshot? { signedIn?.snapshot }
+    var base: Snapshot? { signedIn?.base }
+    var outbox: Outbox { signedIn?.outbox ?? Outbox() }
     var accounts: [Account] { signedIn?.accounts ?? [] }
     var issues: [Account.ID: CalendarServiceError] { signedIn?.issues ?? [:] }
     var isAddingAccount: Bool { signedIn?.isAddingAccount ?? false }
@@ -106,12 +126,49 @@ final class AppModel {
 
     func start() async {
         guard case .launching = phase else { return }
+        watchNetwork()
         guard let session = await service.restore() else {
             phase = .signedOut(nil)
             return
         }
-        phase = .signedIn(SignedIn(session))
+        phase = .signedIn(SignedIn(session, outbox: storedOutbox(for: session)))
+        await drain()
         await refresh()
+    }
+
+    private func storedOutbox(for session: Session) -> Outbox {
+        var outbox = loadOutbox()
+        let signedIn = Set(session.accounts.map(\.id))
+        for account in Set(outbox.changes.map(\.account)).subtracting(signedIn) {
+            log(OutboxLog.removedOnSignOut(outbox.removeAll(for: account)), account: account)
+        }
+        return outbox
+    }
+
+    private func loadOutbox() -> Outbox {
+        guard let outboxStore else { return Outbox() }
+        do {
+            return try outboxStore.load()
+        } catch {
+            let movedTo = try? outboxStore.moveAside().lastPathComponent
+            log(OutboxLog.unreadable(error: error.localizedDescription, movedTo: movedTo))
+            return Outbox()
+        }
+    }
+
+    private func log(_ message: String, account: Account.ID? = nil) {
+        SyncLog.shared?.append(SyncLogEntry(at: .now, source: "app", account: account, message: message), as: .app)
+    }
+
+    private func watchNetwork() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            Task { @MainActor in await self?.drain() }
+        }
+        monitor.start(queue: .main)
+        pathMonitor = monitor
     }
 
     func signIn(authorize: @escaping WebAuthorizer, loginHint: String? = nil) async {
@@ -122,11 +179,12 @@ final class AppModel {
         phase = .signingIn
         do throws(CalendarServiceError) {
             let session = try await service.signIn(authorize: authorize, loginHint: loginHint)
-            phase = .signedIn(SignedIn(session))
+            phase = .signedIn(SignedIn(session, outbox: storedOutbox(for: session)))
             WidgetCenter.shared.reloadAllTimelines()
             if session.snapshot == nil {
                 await refresh()
             }
+            await drain()
         } catch .cancelled {
             phase = .signedOut(nil)
         } catch {
@@ -147,6 +205,7 @@ final class AppModel {
                 $0.isRefreshQueued = $0.isRefreshing
             }
             WidgetCenter.shared.reloadAllTimelines()
+            await drain()
         } catch {
             update {
                 $0.isAddingAccount = false
@@ -176,6 +235,7 @@ final class AppModel {
             }
         } while isRefreshQueued
         update { $0.isRefreshing = false }
+        await drain()
     }
 
     private var isRefreshQueued: Bool {
@@ -185,11 +245,19 @@ final class AppModel {
 
     func refreshIfStale(maxAge: TimeInterval = 5 * 60) async {
         guard case .signedIn(let state) = phase else { return }
-        if let fetchedAt = state.snapshot?.fetchedAt, Date.now.timeIntervalSince(fetchedAt) < maxAge { return }
+        if let fetchedAt = state.base?.fetchedAt, Date.now.timeIntervalSince(fetchedAt) < maxAge {
+            await drain()
+            return
+        }
         await refresh()
     }
 
     func signOut(_ account: Account.ID) async {
+        var removed: [PendingChange] = []
+        updateOutbox { removed = $0.outbox.removeAll(for: account) }
+        if !removed.isEmpty {
+            log(OutboxLog.removedOnSignOut(removed), account: account)
+        }
         if let session = await service.signOut(account) {
             update { state in
                 let issues = state.issues.filter { id, _ in session.accounts.contains { $0.id == id } }
@@ -198,6 +266,7 @@ final class AppModel {
             }
         } else {
             preferences.reset()
+            outboxStore?.clear()
             visibility = CalendarVisibility()
             pendingLink = nil
             phase = .signedOut(nil)
@@ -206,52 +275,82 @@ final class AppModel {
     }
 
     func reschedule(_ event: CalendarEvent, to time: EventTime, notifyGuests: Bool) async {
-        guard let account = snapshot?.account(owning: event.calendarID) else { return }
-        update {
-            $0.snapshot = $0.snapshot?.rescheduling(event.id, to: time)
-            $0.changeIssue = nil
-        }
-        do throws(CalendarServiceError) {
-            try await service.reschedule(event.id, of: account.id, to: time, notifyGuests: notifyGuests)
-            update {
-                $0.snapshot = $0.snapshot?.rescheduling(event.id, to: time)
-                $0.isRefreshQueued = $0.isRefreshing
-            }
-            WidgetCenter.shared.reloadAllTimelines()
-        } catch {
-            update {
-                if $0.snapshot?.events.first(where: { $0.id == event.id })?.time == time {
-                    $0.snapshot = $0.snapshot?.rescheduling(event.id, to: event.time)
-                }
-                $0.changeIssue = error == .cancelled ? nil : ChangeIssue(change: .move, account: account, eventTitle: event.title, error: error)
-            }
-        }
+        await enqueue(event, change: .move(event.id, to: time), notifyGuests: notifyGuests)
     }
 
     func delete(_ event: CalendarEvent, scope: DeletionScope, notifyGuests: Bool) async {
+        await enqueue(event, change: .delete(event.deletion(scope)), notifyGuests: notifyGuests)
+    }
+
+    private func enqueue(_ event: CalendarEvent, change: Change, notifyGuests: Bool) async {
         guard let account = snapshot?.account(owning: event.calendarID) else { return }
-        let deletion = event.deletion(scope)
-        let before = snapshot
-        update {
-            $0.snapshot = $0.snapshot?.deleting(deletion)
+        let pending = PendingChange(account: account.id, change: change, notifyGuests: notifyGuests, eventTitle: event.title)
+        var replaced: [PendingChange] = []
+        updateOutbox {
+            replaced = $0.outbox.enqueue(pending)
             $0.changeIssue = nil
         }
-        let optimistic = snapshot
-        do throws(CalendarServiceError) {
-            try await service.delete(deletion, of: account.id, notifyGuests: notifyGuests)
-            update {
-                $0.snapshot = $0.snapshot?.deleting(deletion)
-                $0.isRefreshQueued = $0.isRefreshing
+        log(OutboxLog.queued(pending, replacing: replaced), account: pending.account)
+        await drain()
+    }
+
+    func drain() async {
+        guard let state = signedIn, !state.isDraining else { return }
+        update { $0.isDraining = true }
+        var blocked: Set<Account.ID> = []
+        while let pending = signedIn?.outbox.next(excluding: blocked) {
+            let outcome: SendOutcome<CalendarServiceError>
+            var failure: String?
+            do throws(CalendarServiceError) {
+                try await service.send(pending)
+                outcome = .sent
+            } catch {
+                failure = "\(error)"
+                outcome = error.outcome
             }
-            WidgetCenter.shared.reloadAllTimelines()
-        } catch {
-            update {
-                if $0.snapshot == optimistic {
-                    $0.snapshot = before
+            guard let current = signedIn else { return }
+            let stillQueued = current.outbox.changes.contains { $0.id == pending.id }
+            log(OutboxLog.result(of: pending, outcome: outcome, error: failure, stillQueued: stillQueued, now: .now), account: pending.account)
+            guard stillQueued else { continue }
+            switch outcome {
+            case .sent:
+                sentCount += 1
+                updateOutbox {
+                    $0.base = $0.base?.applying(pending.change)
+                    $0.outbox.remove(pending.id)
+                    $0.isRefreshQueued = $0.isRefreshing
                 }
-                $0.changeIssue = error == .cancelled ? nil : ChangeIssue(change: .delete, account: account, eventTitle: event.title, error: error)
+            case .retryLater:
+                update { $0.isDraining = false }
+                return
+            case .accountBlocked:
+                blocked.insert(pending.account)
+            case .rejected(let error):
+                updateOutbox {
+                    $0.outbox.remove(pending.id)
+                    $0.changeIssue = $0.accounts.first { $0.id == pending.account }.map {
+                        ChangeIssue(change: pending.change.kind, account: $0, eventTitle: pending.eventTitle, error: error)
+                    }
+                }
             }
         }
+        update { $0.isDraining = false }
+    }
+
+    func drainInBackground() async {
+        log(OutboxLog.backgroundStarted)
+        let sentBefore = sentCount
+        await start()
+        await drain()
+        log(OutboxLog.backgroundFinished(sent: sentCount - sentBefore, queued: outbox.changes.count))
+        scheduleBackgroundDrain()
+    }
+
+    func scheduleBackgroundDrain() {
+        guard let state = signedIn, !state.outbox.isEmpty else { return }
+        let request = BGAppRefreshTaskRequest(identifier: Self.drainTaskIdentifier)
+        request.earliestBeginDate = .now.addingTimeInterval(15 * 60)
+        try? BGTaskScheduler.shared.submit(request)
     }
 
     func dismissChangeIssue() {
@@ -292,5 +391,26 @@ final class AppModel {
         guard case .signedIn(var state) = phase else { return }
         change(&state)
         phase = .signedIn(state)
+    }
+
+    private func updateOutbox(_ change: (inout SignedIn) -> Void) {
+        update(change)
+        if let outbox = signedIn?.outbox, let outboxStore {
+            do {
+                try outboxStore.save(outbox)
+            } catch {
+                log(OutboxLog.saveFailed(count: outbox.changes.count, error: error.localizedDescription))
+            }
+        }
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+}
+
+extension Change {
+    fileprivate var kind: AppModel.ChangeIssue.Change {
+        switch self {
+        case .move: .move
+        case .delete: .delete
+        }
     }
 }

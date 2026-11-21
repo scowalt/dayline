@@ -139,18 +139,22 @@ public actor LiveCalendarService: CalendarService {
         return Session(accounts: remaining.map(\.account), snapshot: SnapshotStore.shared?.latest())
     }
 
-    public func reschedule(_ event: EventID, of account: Account.ID, to time: EventTime, notifyGuests: Bool) async throws(CalendarServiceError) {
-        guard let credential = vault.read().first(where: { $0.account.id == account }) else { throw .sessionExpired }
-        let request = GoogleCalendarAPI.rescheduleRequest(event, to: time, notifyGuests: notifyGuests)
-        let response = try await authorizedResponse(to: request, credential: credential)
-        try google { () throws(GoogleError) in try GoogleCalendarAPI.rescheduleResult(from: response) }
+    public func send(_ pending: PendingChange) async throws(CalendarServiceError) {
+        guard let credential = vault.read().first(where: { $0.account.id == pending.account }) else { throw .sessionExpired }
+        switch pending.change {
+        case .move(let event, let time):
+            let request = GoogleCalendarAPI.rescheduleRequest(event, to: time, notifyGuests: pending.notifyGuests)
+            let response = try await authorizedResponse(to: request, credential: credential)
+            try google { () throws(GoogleError) in try GoogleCalendarAPI.rescheduleResult(from: response) }
+        case .delete(let deletion):
+            try await delete(deletion, notifyGuests: pending.notifyGuests, credential: credential)
+        }
         if let stored = SnapshotStore.shared?.latest() {
-            try? SnapshotStore.shared?.save(stored.rescheduling(event, to: time), as: writer)
+            try? SnapshotStore.shared?.save(stored.applying(pending.change), as: writer)
         }
     }
 
-    public func delete(_ deletion: Deletion, of account: Account.ID, notifyGuests: Bool) async throws(CalendarServiceError) {
-        guard let credential = vault.read().first(where: { $0.account.id == account }) else { throw .sessionExpired }
+    private func delete(_ deletion: Deletion, notifyGuests: Bool, credential: GoogleCredential) async throws(CalendarServiceError) {
         let request: HTTPRequest
         switch deletion {
         case .event(let event), .series(let event):
@@ -163,9 +167,6 @@ public actor LiveCalendarService: CalendarService {
         }
         let response = try await authorizedResponse(to: request, credential: credential)
         try google { () throws(GoogleError) in try GoogleCalendarAPI.deletionResult(from: response) }
-        if let stored = SnapshotStore.shared?.latest() {
-            try? SnapshotStore.shared?.save(stored.deleting(deletion), as: writer)
-        }
     }
 
     public func refreshIfStale(maxAge: Duration) async -> Snapshot? {
@@ -294,6 +295,8 @@ extension CalendarServiceError {
             self = .sessionExpired
         case .insufficientScope:
             self = .missingEditPermission
+        case .server(let status, _) where status >= 500 || status == 429:
+            self = .unavailable
         case .stateMismatch, .authorizationFailed, .missingRefreshToken, .missingCalendarScope, .unauthorized, .server, .malformedResponse:
             self = .failed(error.message)
         }

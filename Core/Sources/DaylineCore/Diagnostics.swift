@@ -34,6 +34,7 @@ public enum Diagnostics {
         accounts: [Account],
         issues: [Account.ID: String],
         snapshot: Snapshot?,
+        outbox: Outbox,
         visibility: CalendarVisibility,
         log: [SyncLogEntry]
     ) -> String {
@@ -63,6 +64,16 @@ public enum Diagnostics {
             let hidden = snapshot?.events.filter { visibility.hides(title: $0.title) }.count ?? 0
             lines.append("")
             lines.append("\(visibility.hiddenTitles.count) hidden titles match \(hidden) events")
+        }
+        lines.append("")
+        if outbox.isEmpty {
+            lines.append("Queued changes: none")
+        } else {
+            lines.append("Queued changes: \(outbox.changes.count)")
+            for pending in outbox.changes {
+                let age = OutboxLog.age(now.timeIntervalSince(pending.queuedAt))
+                lines.append("  - \(pending.change.subject), account \(pending.account), queued \(pending.queuedAt.formatted(.iso8601)) (\(age) ago), notify guests \(pending.notifyGuests ? "yes" : "no")")
+            }
         }
         lines.append("")
         lines.append("Sync log, oldest first")
