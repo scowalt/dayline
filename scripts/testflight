@@ -19,7 +19,7 @@ EOF
 }
 
 stamp_toolchain() {
-  local plist=$1 sdk_version sdk_build xcode_version xcode_build major minor patch
+  local bundle=$1 plist=$1/Info.plist binary sdk_version sdk_build xcode_version xcode_build major minor patch minos
   sdk_version=$(xcrun --sdk iphoneos --show-sdk-version)
   sdk_build=$(xcrun --sdk iphoneos --show-sdk-build-version)
   read -r _ xcode_version < <(xcodebuild -version | sed -n 1p)
@@ -35,6 +35,10 @@ stamp_toolchain() {
   plutil -replace DTXcodeBuild -string "$xcode_build" "$plist"
   plutil -replace DTCompiler -string com.apple.compilers.llvm.clang.1_0 "$plist"
   plutil -replace BuildMachineOSBuild -string "$(sw_vers -buildVersion)" "$plist"
+  binary=$bundle/$(plutil -extract CFBundleExecutable raw "$plist")
+  minos=$(xcrun vtool -show-build "$binary" | awk '$1 == "minos" { print $2; exit }')
+  [[ -n $minos ]] || { echo "no LC_BUILD_VERSION in $binary" >&2; exit 1; }
+  xcrun vtool -set-build-version ios "$minos" "$sdk_version" -replace -output "$binary" "$binary"
 }
 
 compile_icons() {
@@ -106,7 +110,7 @@ sign() {
   compile_icons "$app" "$work"
   for bundle in "$app"/PlugIns/*.appex "$app"; do
     product=$(basename "${bundle%.*}")
-    stamp_toolchain "$bundle/Info.plist"
+    stamp_toolchain "$bundle"
     rm -rf "$bundle/_CodeSignature"
     cp "$signing/$product.mobileprovision" "$bundle/embedded.mobileprovision"
     write_entitlements "$bundle" "$product" "$work/$product.entitlements"
