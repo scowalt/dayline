@@ -16,7 +16,7 @@ private struct SampleBuilder {
         color: RGBColor(hex: "#4285F4")!,
         isPrimary: true,
         isSelectedInGoogle: true,
-        canEditEvents: true
+        access: .owner
     )
     let personal = CalendarInfo(
         id: CalendarID(rawValue: "personal@group.calendar.google.com"),
@@ -24,7 +24,7 @@ private struct SampleBuilder {
         color: RGBColor(hex: "#33B679")!,
         isPrimary: false,
         isSelectedInGoogle: true,
-        canEditEvents: true
+        access: .owner
     )
     let family = CalendarInfo(
         id: CalendarID(rawValue: "family@group.calendar.google.com"),
@@ -32,7 +32,7 @@ private struct SampleBuilder {
         color: RGBColor(hex: "#F4511E")!,
         isPrimary: false,
         isSelectedInGoogle: true,
-        canEditEvents: true
+        access: .writer
     )
     let holidays = CalendarInfo(
         id: CalendarID(rawValue: "en.usa#holiday@group.v.calendar.google.com"),

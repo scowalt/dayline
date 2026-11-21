@@ -132,22 +132,44 @@ public enum Attendance: String, Hashable, Codable, Sendable {
     case needsAction
 }
 
+public enum CalendarAccess: String, Comparable, Codable, Sendable {
+    case freeBusyReader
+    case reader
+    case writer
+    case owner
+
+    private var rank: Int {
+        switch self {
+        case .freeBusyReader: 0
+        case .reader: 1
+        case .writer: 2
+        case .owner: 3
+        }
+    }
+
+    public static func < (lhs: CalendarAccess, rhs: CalendarAccess) -> Bool {
+        lhs.rank < rhs.rank
+    }
+}
+
 public struct CalendarInfo: Identifiable, Hashable, Codable, Sendable {
     public let id: CalendarID
     public var title: String
     public var color: RGBColor
     public var isPrimary: Bool
     public var isSelectedInGoogle: Bool
-    public var canEditEvents: Bool
+    public var access: CalendarAccess
 
-    public init(id: CalendarID, title: String, color: RGBColor, isPrimary: Bool, isSelectedInGoogle: Bool, canEditEvents: Bool = false) {
+    public init(id: CalendarID, title: String, color: RGBColor, isPrimary: Bool, isSelectedInGoogle: Bool, access: CalendarAccess = .reader) {
         self.id = id
         self.title = title
         self.color = color
         self.isPrimary = isPrimary
         self.isSelectedInGoogle = isSelectedInGoogle
-        self.canEditEvents = canEditEvents
+        self.access = access
     }
+
+    public var canEditEvents: Bool { access >= .writer }
 }
 
 public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
@@ -306,9 +328,14 @@ public struct Snapshot: Hashable, Codable, Sendable {
     }
 
     private var owned: [(account: AccountSnapshot, calendars: [CalendarInfo])] {
-        var claimed = Set<CalendarID>()
-        return accounts.map { account in
-            (account, account.calendars.filter { claimed.insert($0.id).inserted })
+        var owners: [CalendarID: (account: Int, access: CalendarAccess)] = [:]
+        for (index, account) in accounts.enumerated() {
+            for calendar in account.calendars where owners[calendar.id].map({ calendar.access > $0.access }) ?? true {
+                owners[calendar.id] = (index, calendar.access)
+            }
+        }
+        return accounts.enumerated().map { index, account in
+            (account, account.calendars.filter { owners[$0.id]?.account == index })
         }
     }
 }

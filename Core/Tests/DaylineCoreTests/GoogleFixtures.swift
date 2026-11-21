@@ -184,6 +184,14 @@ enum GoogleFixtures {
               "selected": false,
               "hidden": true,
               "accessRole": "reader"
+            },
+            {
+              "kind": "calendar#calendarListEntry",
+              "id": "pat.lee@example.com",
+              "summary": "Pat Lee",
+              "colorId": "2",
+              "selected": false,
+              "accessRole": "freeBusyReader"
             }
           ]
         }

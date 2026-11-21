@@ -17,6 +17,7 @@ struct SettingsView: View {
                     accountSection(account)
                 }
                 hiddenTitlesSection
+                DiagnosticsSection(model: model, version: Self.version)
                 addAccountSection
             }
             .navigationTitle("Settings")
