@@ -109,6 +109,31 @@ struct EventRow: View {
     }
 }
 
+struct EventLine: View {
+    let event: CalendarEvent
+    let color: RGBColor?
+    let time: String
+    let inProgress: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(event.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Text(time)
+                .font(.footnote.weight(inProgress ? .semibold : .regular))
+                .monospacedDigit()
+                .foregroundStyle(inProgress ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                .widgetAccentable(inProgress)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .calendarBar(color)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct AllDayLine: View {
     let event: CalendarEvent
     let color: RGBColor?
