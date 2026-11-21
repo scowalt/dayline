@@ -133,7 +133,7 @@ public enum GoogleCalendarAPI {
     private static let fixedEventTypes: Set<String> = ["birthday", "fromGmail"]
 
     private static func event(from item: EventsBody.Item, calendar: CalendarInfo) -> CalendarEvent? {
-        guard item.status != "cancelled", item.eventType != "workingLocation", let time = time(start: item.start, end: item.end) else { return nil }
+        guard item.status != "cancelled", item.eventType != "workingLocation", let time = time(start: item.start, end: item.end, eventType: item.eventType) else { return nil }
         let attendees = item.attendees ?? []
         let videoEntry = item.conferenceData?.entryPoints?.first { $0.entryPointType == "video" }?.uri
         let isFixedType = fixedEventTypes.contains(item.eventType ?? "default")
@@ -170,7 +170,21 @@ public enum GoogleCalendarAPI {
         return time?.date.flatMap(CivilDate.init(isoString:)).map(OccurrenceStart.day)
     }
 
-    private static func time(start: EventsBody.Time?, end: EventsBody.Time?) -> EventTime? {
+    private static func googleAllDayOutOfOffice(start: EventsBody.Time?, end: EventsBody.Time?) -> EventTime? {
+        guard let first = start?.dateTime.flatMap(midnightDate), let end = end?.dateTime.flatMap(midnightDate), end > first else { return nil }
+        return .allDay(first: first, last: end.adding(days: -1, in: civil))
+    }
+
+    private static func midnightDate(_ dateTime: String) -> CivilDate? {
+        let parts = dateTime.split(separator: "T", maxSplits: 1)
+        guard parts.count == 2, parts[1].hasPrefix("00:00:00") else { return nil }
+        return CivilDate(isoString: String(parts[0]))
+    }
+
+    private static func time(start: EventsBody.Time?, end: EventsBody.Time?, eventType: String?) -> EventTime? {
+        if eventType == "outOfOffice", let days = googleAllDayOutOfOffice(start: start, end: end) {
+            return days
+        }
         if let start = start?.dateTime.flatMap(parseDate), let end = end?.dateTime.flatMap(parseDate) {
             return .timed(start: start, end: end)
         }
