@@ -15,21 +15,24 @@ private struct SampleBuilder {
         title: "alex@example.com",
         color: RGBColor(hex: "#4285F4")!,
         isPrimary: true,
-        isSelectedInGoogle: true
+        isSelectedInGoogle: true,
+        canEditEvents: true
     )
     let personal = CalendarInfo(
         id: CalendarID(rawValue: "personal@group.calendar.google.com"),
         title: "Personal",
         color: RGBColor(hex: "#33B679")!,
         isPrimary: false,
-        isSelectedInGoogle: true
+        isSelectedInGoogle: true,
+        canEditEvents: true
     )
     let family = CalendarInfo(
         id: CalendarID(rawValue: "family@group.calendar.google.com"),
         title: "Family",
         color: RGBColor(hex: "#F4511E")!,
         isPrimary: false,
-        isSelectedInGoogle: true
+        isSelectedInGoogle: true,
+        canEditEvents: true
     )
     let holidays = CalendarInfo(
         id: CalendarID(rawValue: "en.usa#holiday@group.v.calendar.google.com"),
@@ -118,7 +121,8 @@ private struct SampleBuilder {
             conferenceURL: meet.flatMap { URL(string: "https://meet.google.com/\($0)") },
             webURL: URL(string: "https://calendar.google.com/calendar/event?eid=\(id)"),
             attendance: attendance,
-            attendeeCount: attendees
+            attendeeCount: attendees,
+            canReschedule: owner.canEditEvents && (attendance == nil || attendance == .accepted)
         )
     }
 

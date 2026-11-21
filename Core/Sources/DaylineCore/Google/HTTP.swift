@@ -4,6 +4,7 @@ public struct HTTPRequest: Hashable, Sendable {
     public enum Method: String, Hashable, Sendable {
         case get = "GET"
         case post = "POST"
+        case patch = "PATCH"
     }
 
     public var method: Method
@@ -29,6 +30,12 @@ public struct HTTPRequest: Hashable, Sendable {
             headers: ["Content-Type": "application/x-www-form-urlencoded"],
             body: Data(FormEncoding.encode(fields).utf8)
         )
+    }
+
+    static func json(_ method: Method, _ url: URL, body: some Encodable) -> HTTPRequest {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return HTTPRequest(method: method, url: url, headers: ["Content-Type": "application/json"], body: try! encoder.encode(body))
     }
 
     public func authorized(with token: AccessToken) -> HTTPRequest {

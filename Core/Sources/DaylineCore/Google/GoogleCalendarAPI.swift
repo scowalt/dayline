@@ -45,13 +45,31 @@ public enum GoogleCalendarAPI {
                 title: entry.summaryOverride ?? entry.summary ?? entry.id,
                 color: GoogleColors.calendar(colorID: entry.colorId, background: entry.backgroundColor),
                 isPrimary: entry.primary == true,
-                isSelectedInGoogle: entry.selected == true
+                isSelectedInGoogle: entry.selected == true,
+                canEditEvents: entry.accessRole == "owner" || entry.accessRole == "writer"
             )
         }
         return Page(items: calendars, nextPageToken: body.nextPageToken)
     }
 
-    public static func eventsPage(from response: HTTPResponse, calendar: CalendarID) throws(GoogleError) -> Page<CalendarEvent> {
+    public static func rescheduleRequest(_ event: EventID, to time: EventTime, notifyGuests: Bool) -> HTTPRequest {
+        let url = base.appendingPathSegment("calendars").appendingPathSegment(event.calendar.rawValue)
+            .appendingPathSegment("events").appendingPathSegment(event.event)
+            .appendingQuery([("sendUpdates", notifyGuests ? "all" : "none")])
+        let body: RescheduleBody = switch time {
+        case .timed(let start, let end):
+            RescheduleBody(start: .init(dateTime: start.formatted(.iso8601)), end: .init(dateTime: end.formatted(.iso8601)))
+        case .allDay(let first, let last):
+            RescheduleBody(start: .init(date: first.isoString), end: .init(date: last.adding(days: 1, in: civil).isoString))
+        }
+        return .json(.patch, url, body: body)
+    }
+
+    public static func rescheduleResult(from response: HTTPResponse) throws(GoogleError) {
+        guard response.isSuccess else { throw GoogleError(apiResponse: response) }
+    }
+
+    public static func eventsPage(from response: HTTPResponse, calendar: CalendarInfo) throws(GoogleError) -> Page<CalendarEvent> {
         let body = try decode(EventsBody.self, from: response)
         let events = (body.items ?? []).compactMap { event(from: $0, calendar: calendar) }
         return Page(items: events, nextPageToken: body.nextPageToken)
@@ -66,12 +84,14 @@ public enum GoogleCalendarAPI {
         return try GoogleJSON.decode(type, from: response.body)
     }
 
-    private static func event(from item: EventsBody.Item, calendar: CalendarID) -> CalendarEvent? {
+    private static let fixedEventTypes: Set<String> = ["birthday", "fromGmail"]
+
+    private static func event(from item: EventsBody.Item, calendar: CalendarInfo) -> CalendarEvent? {
         guard item.status != "cancelled", item.eventType != "workingLocation", let time = time(start: item.start, end: item.end) else { return nil }
         let attendees = item.attendees ?? []
         let videoEntry = item.conferenceData?.entryPoints?.first { $0.entryPointType == "video" }?.uri
         return CalendarEvent(
-            id: EventID(calendar: calendar, event: item.id),
+            id: EventID(calendar: calendar.id, event: item.id),
             title: item.summary.flatMap(nonBlank) ?? untitledEvent,
             time: time,
             location: item.location.flatMap(nonBlank),
@@ -80,7 +100,11 @@ public enum GoogleCalendarAPI {
             webURL: item.htmlLink.flatMap(URL.init(string:)),
             color: GoogleColors.event(colorID: item.colorId),
             attendance: attendees.first { $0.isSelf == true }?.responseStatus.flatMap(Attendance.init(rawValue:)),
-            attendeeCount: attendees.filter { $0.resource != true }.count
+            attendeeCount: attendees.filter { $0.resource != true }.count,
+            canReschedule: calendar.canEditEvents
+                && (item.organizer?.isSelf == true || item.guestsCanModify == true)
+                && item.locked != true
+                && !fixedEventTypes.contains(item.eventType ?? "default")
         )
     }
 
@@ -113,6 +137,7 @@ private struct CalendarListBody: Decodable {
         var primary: Bool?
         var selected: Bool?
         var deleted: Bool?
+        var accessRole: String?
     }
 
     var items: [Entry]?
@@ -134,6 +159,17 @@ private struct EventsBody: Decodable {
         var attendees: [Attendee]?
         var conferenceData: Conference?
         var hangoutLink: String?
+        var organizer: Organizer?
+        var guestsCanModify: Bool?
+        var locked: Bool?
+    }
+
+    struct Organizer: Decodable {
+        enum CodingKeys: String, CodingKey {
+            case isSelf = "self"
+        }
+
+        var isSelf: Bool?
     }
 
     struct Time: Decodable {
@@ -164,4 +200,14 @@ private struct EventsBody: Decodable {
 
     var items: [Item]?
     var nextPageToken: String?
+}
+
+private struct RescheduleBody: Encodable {
+    struct Time: Encodable {
+        var date: String?
+        var dateTime: String?
+    }
+
+    var start: Time
+    var end: Time
 }

@@ -4,6 +4,12 @@ import Testing
 
 struct GoogleCalendarAPITests {
     let primary = CalendarID(rawValue: "alex.rivera@example.com")
+    var owned: CalendarInfo {
+        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, canEditEvents: true)
+    }
+    var subscribed: CalendarInfo {
+        CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true, canEditEvents: false)
+    }
     let newYork: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "America/New_York")!
@@ -53,7 +59,7 @@ struct GoogleCalendarAPITests {
         let first = try GoogleCalendarAPI.calendarListPage(from: GoogleFixtures.response(GoogleFixtures.calendarListFirstPage))
         #expect(first.nextPageToken == "calendars-p2")
         #expect(first.items == [
-            CalendarInfo(id: primary, title: "alex.rivera@example.com", color: RGBColor(hex: "#4285F4")!, isPrimary: true, isSelectedInGoogle: true),
+            owned,
             CalendarInfo(id: CalendarID(rawValue: "c_8f1b2a90d3e44c1e@group.calendar.google.com"), title: "Team", color: RGBColor(hex: "#0B8043")!, isPrimary: false, isSelectedInGoogle: true),
             CalendarInfo(id: CalendarID(rawValue: "en.usa#holiday@group.v.calendar.google.com"), title: "Holidays in United States", color: RGBColor(hex: "#b1365f")!, isPrimary: false, isSelectedInGoogle: false),
         ])
@@ -66,7 +72,7 @@ struct GoogleCalendarAPITests {
     }
 
     @Test func timedEventsKeepTheirInstantsAttendanceAndConference() throws {
-        let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsFirstPage), calendar: primary)
+        let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsFirstPage), calendar: owned)
         #expect(page.nextPageToken == "events-p2")
         let events = Dictionary(uniqueKeysWithValues: page.items.map { ($0.id.event, $0) })
         #expect(events.count == 5)
@@ -106,12 +112,43 @@ struct GoogleCalendarAPITests {
         #expect(events["blanktitle"] == CalendarEvent(
             id: EventID(calendar: primary, event: "blanktitle"),
             title: "(No title)",
-            time: .timed(start: utc(2026, 11, 22, 15, 0), end: utc(2026, 11, 22, 15, 0))
+            time: .timed(start: utc(2026, 11, 22, 15, 0), end: utc(2026, 11, 22, 15, 0)),
+            canReschedule: true
         ))
     }
 
+    @Test func onlyEventsYouOrganizeOrMayModifyOnAWritableCalendarCanBeRescheduled() throws {
+        let response = GoogleFixtures.response(GoogleFixtures.eventsFirstPage)
+        let writable = try GoogleCalendarAPI.eventsPage(from: response, calendar: owned).items
+        let readOnly = try GoogleCalendarAPI.eventsPage(from: response, calendar: subscribed).items
+
+        #expect(Set(writable.filter(\.canReschedule).map(\.id.event)) == ["blanktitle", "zoomsync01"])
+        #expect(readOnly.allSatisfy { !$0.canReschedule })
+    }
+
+    @Test func rescheduleRequestPatchesOnlyTheStartAndEnd() throws {
+        let event = EventID(calendar: CalendarID(rawValue: "team#x@group.calendar.google.com"), event: "abc_20261120T160000Z")
+        let request = GoogleCalendarAPI.rescheduleRequest(event, to: .timed(start: utc(2026, 11, 20, 17, 15), end: utc(2026, 11, 20, 18, 15)), notifyGuests: true)
+
+        #expect(request.method == .patch)
+        #expect(request.url.absoluteString == "https://www.googleapis.com/calendar/v3/calendars/team%23x%40group.calendar.google.com/events/abc_20261120T160000Z?sendUpdates=all")
+        #expect(request.headers == ["Content-Type": "application/json"])
+        #expect(String(decoding: try #require(request.body), as: UTF8.self) == #"{"end":{"dateTime":"2026-11-20T18:15:00Z"},"start":{"dateTime":"2026-11-20T17:15:00Z"}}"#)
+
+        let quiet = GoogleCalendarAPI.rescheduleRequest(event, to: .allDay(first: CivilDate(year: 2026, month: 11, day: 30), last: CivilDate(year: 2026, month: 12, day: 2)), notifyGuests: false)
+        #expect(quiet.url.query() == "sendUpdates=none")
+        #expect(String(decoding: try #require(quiet.body), as: UTF8.self) == #"{"end":{"date":"2026-12-03"},"start":{"date":"2026-11-30"}}"#)
+    }
+
+    @Test func rescheduleWithAReadOnlyTokenAsksForEditPermission() throws {
+        #expect(throws: GoogleError.insufficientScope) {
+            try GoogleCalendarAPI.rescheduleResult(from: GoogleFixtures.response(GoogleFixtures.insufficientScope, status: 403))
+        }
+        try GoogleCalendarAPI.rescheduleResult(from: GoogleFixtures.response("{}"))
+    }
+
     @Test func allDayEndDatesBecomeInclusiveAndCancelledOrWorkingLocationEventsDisappear() throws {
-        let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsLastPage), calendar: primary)
+        let page = try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.eventsLastPage), calendar: owned)
         #expect(page.nextPageToken == nil)
         let events = Dictionary(uniqueKeysWithValues: page.items.map { ($0.id.event, $0) })
 
@@ -128,10 +165,10 @@ struct GoogleCalendarAPITests {
             try GoogleCalendarAPI.calendarListPage(from: GoogleFixtures.response(GoogleFixtures.unauthenticated, status: 401))
         }
         #expect(throws: GoogleError.server(status: 403, message: "Rate Limit Exceeded")) {
-            try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.rateLimited, status: 403), calendar: primary)
+            try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(GoogleFixtures.rateLimited, status: 403), calendar: owned)
         }
         #expect(throws: GoogleError.malformedResponse) {
-            try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(#"{"items": {"id": 1}}"#), calendar: primary)
+            try GoogleCalendarAPI.eventsPage(from: GoogleFixtures.response(#"{"items": {"id": 1}}"#), calendar: owned)
         }
     }
 

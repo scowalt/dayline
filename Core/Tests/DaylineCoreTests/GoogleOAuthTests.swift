@@ -34,11 +34,12 @@ struct GoogleOAuthTests {
             "client_id": "1234567890-abc.apps.googleusercontent.com",
             "redirect_uri": "com.googleusercontent.apps.1234567890-abc:/oauthredirect",
             "response_type": "code",
-            "scope": "openid email profile https://www.googleapis.com/auth/calendar.readonly",
+            "scope": "openid email profile https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events",
             "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
             "code_challenge_method": "S256",
             "state": "s+t/a=te",
             "prompt": "select_account",
+            "include_granted_scopes": "true",
         ])
         let encodedQuery = try #require(components.percentEncodedQuery)
         #expect(!encodedQuery.contains("+"))

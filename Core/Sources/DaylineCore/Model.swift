@@ -100,13 +100,15 @@ public struct CalendarInfo: Identifiable, Hashable, Codable, Sendable {
     public var color: RGBColor
     public var isPrimary: Bool
     public var isSelectedInGoogle: Bool
+    public var canEditEvents: Bool
 
-    public init(id: CalendarID, title: String, color: RGBColor, isPrimary: Bool, isSelectedInGoogle: Bool) {
+    public init(id: CalendarID, title: String, color: RGBColor, isPrimary: Bool, isSelectedInGoogle: Bool, canEditEvents: Bool = false) {
         self.id = id
         self.title = title
         self.color = color
         self.isPrimary = isPrimary
         self.isSelectedInGoogle = isSelectedInGoogle
+        self.canEditEvents = canEditEvents
     }
 }
 
@@ -121,6 +123,7 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
     public var color: RGBColor?
     public var attendance: Attendance?
     public var attendeeCount: Int
+    public var canReschedule: Bool
 
     public init(
         id: EventID,
@@ -132,7 +135,8 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         webURL: URL? = nil,
         color: RGBColor? = nil,
         attendance: Attendance? = nil,
-        attendeeCount: Int = 0
+        attendeeCount: Int = 0,
+        canReschedule: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -144,6 +148,7 @@ public struct CalendarEvent: Identifiable, Hashable, Codable, Sendable {
         self.color = color
         self.attendance = attendance
         self.attendeeCount = attendeeCount
+        self.canReschedule = canReschedule
     }
 
     public var calendarID: CalendarID { id.calendar }
@@ -203,6 +208,20 @@ public struct Snapshot: Hashable, Codable, Sendable {
 
     public func calendar(_ id: CalendarID) -> CalendarInfo? {
         calendars.first { $0.id == id }
+    }
+
+    public func account(owning calendar: CalendarID) -> Account? {
+        owned.first { $0.calendars.contains { $0.id == calendar } }?.account.account
+    }
+
+    public func rescheduling(_ event: EventID, to time: EventTime) -> Snapshot {
+        var snapshot = self
+        for index in snapshot.accounts.indices {
+            for eventIndex in snapshot.accounts[index].events.indices where snapshot.accounts[index].events[eventIndex].id == event {
+                snapshot.accounts[index].events[eventIndex].time = time
+            }
+        }
+        return snapshot
     }
 
     public func events(visibleWith visibility: CalendarVisibility) -> [CalendarEvent] {
