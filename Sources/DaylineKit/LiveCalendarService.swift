@@ -64,7 +64,9 @@ public actor LiveCalendarService: CalendarService {
         let window = GoogleCalendarAPI.window(containing: now, in: .current)
         let visibility = CalendarPreferences().visibility
         record("Refresh started for \(credentials.count) accounts")
-        let outcomes = await fetchAll(credentials, window: window, visibility: visibility)
+        let outcomes = await credentials.concurrentResults { credential throws(CalendarServiceError) in
+            try await self.fetchAccount(credential, window: window, visibility: visibility)
+        }
         let carried = SnapshotStore.shared?.latest()
 
         var fetched: [AccountSnapshot] = []
@@ -173,29 +175,6 @@ public actor LiveCalendarService: CalendarService {
             return stored
         }
         return (try? await refresh())?.snapshot ?? stored
-    }
-
-    private func fetchAll(
-        _ credentials: [GoogleCredential],
-        window: DateInterval,
-        visibility: CalendarVisibility
-    ) async -> [Result<AccountSnapshot, CalendarServiceError>] {
-        await withTaskGroup(of: (Int, Result<AccountSnapshot, CalendarServiceError>).self) { group in
-            for (index, credential) in credentials.enumerated() {
-                group.addTask {
-                    do throws(CalendarServiceError) {
-                        return (index, .success(try await self.fetchAccount(credential, window: window, visibility: visibility)))
-                    } catch {
-                        return (index, .failure(error))
-                    }
-                }
-            }
-            var outcomes = [Result<AccountSnapshot, CalendarServiceError>?](repeating: nil, count: credentials.count)
-            for await (index, outcome) in group {
-                outcomes[index] = outcome
-            }
-            return outcomes.compactMap { $0 }
-        }
     }
 
     private func fetchAccount(
