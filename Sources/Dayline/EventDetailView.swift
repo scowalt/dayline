@@ -127,50 +127,48 @@ private struct EventDetails: View {
                         .textSelection(.enabled)
                 }
             }
-            if let webURL = event.webURL {
-                Section {
-                    Link(destination: webURL) {
-                        Label("Open in Google Calendar", systemImage: "arrow.up.forward.app")
-                    }
-                }
-            }
-            if !event.deletionScopes.isEmpty {
-                Section {
-                    Button("Delete Event", systemImage: "trash", role: .destructive) {
-                        isChoosingScope = true
-                    }
-                    .confirmationDialog("Delete “\(event.title)”?", isPresented: $isChoosingScope, titleVisibility: .visible) {
-                        ForEach(event.deletionScopes, id: \.self) { scope in
-                            Button(event.occurrence == nil ? "Delete Event" : scope.title, role: .destructive) {
-                                choose(scope)
-                            }
-                        }
-                    } message: {
-                        Text(event.occurrence == nil ? "It's also removed from Google Calendar." : "This is a repeating event.")
-                    }
-                    .confirmationDialog(
-                        "Send cancellation to guests?",
-                        isPresented: Binding(get: { cancellationScope != nil }, set: { if !$0 { cancellationScope = nil } }),
-                        titleVisibility: .visible,
-                        presenting: cancellationScope
-                    ) { scope in
-                        Button("Send") { delete(scope, true) }
-                        Button("Don't Send") { delete(scope, false) }
-                        Button("Cancel", role: .cancel) {}
-                    } message: { _ in
-                        Text("“\(event.title)” is cancelled for everyone invited.")
-                    }
-                }
-            }
         }
         .listStyle(.insetGrouped)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu("More", systemImage: "ellipsis") {
+                    if let webURL = event.webURL {
+                        Link(destination: webURL) {
+                            Label("Open in Google Calendar", systemImage: "arrow.up.forward.app")
+                        }
+                    }
                     Button(action: hideTitle) {
                         Label("Hide Events Titled “\(event.title)”", systemImage: "eye.slash")
                         Text("Show them again in Settings.")
                     }
+                    if !event.deletionScopes.isEmpty {
+                        Section {
+                            Button("Delete Event", systemImage: "trash", role: .destructive) {
+                                isChoosingScope = true
+                            }
+                        }
+                    }
+                }
+                .confirmationDialog("Delete “\(event.title)”?", isPresented: $isChoosingScope, titleVisibility: .visible) {
+                    ForEach(event.deletionScopes, id: \.self) { scope in
+                        Button(event.occurrence == nil ? "Delete Event" : scope.title, role: .destructive) {
+                            choose(scope)
+                        }
+                    }
+                } message: {
+                    Text(event.occurrence == nil ? "It's also removed from Google Calendar." : "This is a repeating event.")
+                }
+                .confirmationDialog(
+                    "Send cancellation to guests?",
+                    isPresented: Binding(get: { cancellationScope != nil }, set: { if !$0 { cancellationScope = nil } }),
+                    titleVisibility: .visible,
+                    presenting: cancellationScope
+                ) { scope in
+                    Button("Send") { delete(scope, true) }
+                    Button("Don't Send") { delete(scope, false) }
+                    Button("Cancel", role: .cancel) {}
+                } message: { _ in
+                    Text("“\(event.title)” is cancelled for everyone invited.")
                 }
             }
         }
