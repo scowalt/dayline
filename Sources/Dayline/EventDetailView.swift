@@ -134,11 +134,6 @@ private struct EventDetails: View {
                     }
                 }
             }
-            Section {
-                Button("Hide Events Titled “\(event.title)”", systemImage: "eye.slash", action: hideTitle)
-            } footer: {
-                Text("Show them again in Settings.")
-            }
             if !event.deletionScopes.isEmpty {
                 Section {
                     Button("Delete Event", systemImage: "trash", role: .destructive) {
@@ -169,6 +164,16 @@ private struct EventDetails: View {
             }
         }
         .listStyle(.insetGrouped)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu("More", systemImage: "ellipsis") {
+                    Button(action: hideTitle) {
+                        Label("Hide Events Titled “\(event.title)”", systemImage: "eye.slash")
+                        Text("Show them again in Settings.")
+                    }
+                }
+            }
+        }
     }
 
     private func choose(_ scope: DeletionScope) {
